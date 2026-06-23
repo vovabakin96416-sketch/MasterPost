@@ -1,0 +1,148 @@
+// Схема БД AI Channel Manager.
+// Спроектирована СРАЗУ под мультиканальность и любую нишу: вся тематика
+// (слова-триггеры, контент, тексты, настройки) живёт в данных канала, не в коде.
+// Новый канал = новые строки в таблицах, код не меняется.
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7: строка подключения живёт в prisma.config.ts (для CLI/Migrate),
+// а рантайм-клиент получает её через драйвер-адаптер @prisma/adapter-pg.
+datasource db {
+  provider = "postgresql"
+}
+
+// Тип интерактива поста (из content.json канала №1).
+enum InteractiveType {
+  keyword_trigger
+  button_choice
+  button_prediction
+  vote_123
+}
+
+// Слот публикации в течение дня.
+enum Slot {
+  morning
+  evening
+}
+
+// День недели поста контент-плана.
+enum Weekday {
+  monday
+  tuesday
+  wednesday
+  thursday
+  friday
+  saturday
+  sunday
+}
+
+// Канал — корень всех данных. Хранит тематику и настройки, не код.
+model Channel {
+  id            String    @id @default(cuid())
+  title         String
+  username      String?   @unique // @sofia_gada1ka и т.п.
+  niche         String // эзотерика / новости / бизнес — любая ниша
+  language      String    @default("ru")
+  region        String?
+  goal          String?
+  toneOfVoice   String?
+  timezone      String    @default("Europe/Moscow")
+  campaignStart DateTime? // старт контент-плана (для расчёта недели/дня)
+  triggerWords  String[]  @default([]) // слова-триггеры в комментах, напр. ["карта","кофе","руна"]
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  posts       Post[]
+  textPools   TextPool[]
+  settings    Setting[]
+  cooldowns   Cooldown[]
+  subscribers Subscriber[]
+}
+
+// Пост контент-плана. Поля повторяют content.json.
+model Post {
+  id              String          @id @default(cuid())
+  channelId       String
+  channel         Channel         @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  externalId      Int // исходный id из content.json (1..32) — ключ для идемпотентного сида
+  week            Int
+  day             Weekday
+  slot            Slot
+  time            String // "10:00"
+  title           String
+  text            String
+  cta             String
+  interactiveType InteractiveType
+  keyword         String? // для keyword_trigger
+  reactions       String[]        @default([])
+  choices         Json? // для button_choice: [{label, answer}]
+  button          Json? // для button_prediction: {type, label}
+  pexelsQuery     String?
+  photoPath       String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([channelId, externalId])
+  @@index([channelId, week, day, slot])
+}
+
+// Пул текстов-предсказаний (замена DEFAULT_TEXTS / texts.json).
+model TextPool {
+  id        String   @id @default(cuid())
+  channelId String
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  key       String // karta | kofe | runa | button_love | button_money | button_cards
+  texts     String[] @default([])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([channelId, key])
+  @@index([channelId])
+}
+
+// Произвольные настройки канала (замена settings.json).
+model Setting {
+  id        String   @id @default(cuid())
+  channelId String
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  key       String
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@unique([channelId, key])
+  @@index([channelId])
+}
+
+// Кулдаун на триггер для пользователя (Шаг 2).
+model Cooldown {
+  id        String   @id @default(cuid())
+  channelId String
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String // telegram user id
+  trigger   String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([channelId, userId, trigger])
+  @@index([channelId, expiresAt])
+}
+
+// Подписчик канала (заготовка под аналитику).
+model Subscriber {
+  id        String   @id @default(cuid())
+  channelId String
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String // telegram user id
+  username  String?
+  firstSeen DateTime @default(now())
+  lastSeen  DateTime @default(now())
+  meta      Json?
+
+  @@unique([channelId, userId])
+  @@index([channelId])
+}

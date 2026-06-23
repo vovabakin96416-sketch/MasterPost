@@ -13,6 +13,9 @@ export const envSchema = z.object({
   LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
+  DATABASE_URL: z
+    .string({ required_error: "DATABASE_URL обязателен (строка подключения к PostgreSQL)" })
+    .min(1, "DATABASE_URL не должен быть пустым"),
 });
 
 export type Env = z.infer<typeof envSchema>;

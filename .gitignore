@@ -3,6 +3,9 @@ node_modules/
 dist/
 coverage/
 
+# Сгенерированный Prisma-клиент (build-артефакт, создаётся `prisma generate`)
+src/generated/
+
 # Секреты — НИКОГДА не коммитим (репозиторий публичный)
 .env
 .env.local
@@ -14,3 +17,5 @@ coverage/
 # Системное
 .DS_Store
 Thumbs.db
+
+/src/generated/prisma
