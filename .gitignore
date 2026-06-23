@@ -1,0 +1,16 @@
+# Зависимости и сборка
+node_modules/
+dist/
+coverage/
+
+# Секреты — НИКОГДА не коммитим (репозиторий публичный)
+.env
+.env.local
+.env.*.local
+
+# Логи
+*.log
+
+# Системное
+.DS_Store
+Thumbs.db
