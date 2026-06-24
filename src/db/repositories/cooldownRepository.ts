@@ -1,38 +1,46 @@
 import type { PrismaClient } from "../client.js";
-import { isOnCooldown, nextExpiry } from "../../core/triggers/cooldown.js";
 
 /**
- * Проверяет и «потребляет» кулдаун на пару (канал, пользователь, слово).
- *
- * - Если запись есть и ещё не истекла → `false` (на кулдауне, ответ не даём).
- * - Иначе ставит/обновляет срок `now + ttlHours` и возвращает `true` (можно
- *   отвечать). Идемпотентный upsert по уникуму `channelId_userId_trigger`.
- *
- * Time-логика вынесена в чистый `core/triggers/cooldown` и покрыта тестами.
+ * Состояние кулдауна на пару (канал, пользователь, слово): когда истекает и
+ * «память» недавно показанных ответов (ключи) для анти-повтора («колода»).
  */
-export async function tryConsumeCooldown(
+export interface CooldownState {
+  expiresAt: Date;
+  recent: string[];
+}
+
+/**
+ * Читает строку кулдауна по уникуму `channelId_userId_trigger` или `null`.
+ * Решение «на кулдауне ли» и выбор без повтора — в чистом core; здесь только I/O.
+ */
+export async function loadCooldown(
   prisma: PrismaClient,
   channelId: string,
   userId: string,
   trigger: string,
-  ttlHours: number,
-  now: Date = new Date(),
-): Promise<boolean> {
-  const key = { channelId_userId_trigger: { channelId, userId, trigger } };
-
-  const existing = await prisma.cooldown.findUnique({
-    where: key,
-    select: { expiresAt: true },
+): Promise<CooldownState | null> {
+  const row = await prisma.cooldown.findUnique({
+    where: { channelId_userId_trigger: { channelId, userId, trigger } },
+    select: { expiresAt: true, recent: true },
   });
-  if (existing && isOnCooldown(existing.expiresAt, now)) {
-    return false;
-  }
+  return row ? { expiresAt: row.expiresAt, recent: row.recent } : null;
+}
 
-  const expiresAt = nextExpiry(now, ttlHours);
+/**
+ * Идемпотентно сохраняет кулдаун (срок + память) по уникуму. Вызывается, только
+ * когда бот реально ответил (как в Python — кулдаун ставится при ответе).
+ */
+export async function saveCooldown(
+  prisma: PrismaClient,
+  channelId: string,
+  userId: string,
+  trigger: string,
+  expiresAt: Date,
+  recent: string[],
+): Promise<void> {
   await prisma.cooldown.upsert({
-    where: key,
-    create: { channelId, userId, trigger, expiresAt },
-    update: { expiresAt },
+    where: { channelId_userId_trigger: { channelId, userId, trigger } },
+    create: { channelId, userId, trigger, expiresAt, recent },
+    update: { expiresAt, recent },
   });
-  return true;
 }

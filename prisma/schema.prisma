@@ -126,6 +126,7 @@ model Cooldown {
   userId    String // telegram user id
   trigger   String
   expiresAt DateTime
+  recent    String[] @default([]) // ключи недавно показанных ответов (анти-повтор «колода»)
   createdAt DateTime @default(now())
 
   @@unique([channelId, userId, trigger])

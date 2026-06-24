@@ -1,8 +1,12 @@
 import { matchTrigger } from "../../../core/triggers/matchTrigger.js";
-import { pickPrediction } from "../../../core/triggers/pickPrediction.js";
+import { pickPredictionNoRepeat } from "../../../core/triggers/pickPrediction.js";
+import { isOnCooldown, nextExpiry } from "../../../core/triggers/cooldown.js";
 import { getActiveChannel } from "../../../db/repositories/channelRepository.js";
 import { getTextPool } from "../../../db/repositories/textPoolRepository.js";
-import { tryConsumeCooldown } from "../../../db/repositories/cooldownRepository.js";
+import {
+  loadCooldown,
+  saveCooldown,
+} from "../../../db/repositories/cooldownRepository.js";
 import { getBooleanSetting } from "../../../db/repositories/settingRepository.js";
 import type { CommentStage } from "./types.js";
 
@@ -58,26 +62,36 @@ export function createTriggerStage(): CommentStage {
       }
 
       const userId = String(from.id);
-      // Кулдаун потребляем только когда реально готовы ответить (как в Python).
-      const allowed = await tryConsumeCooldown(
+      const now = new Date();
+      const cooldown = await loadCooldown(
         deps.prisma,
         channel.id,
         userId,
         matched,
-        COOLDOWN_HOURS,
       );
-      if (!allowed) {
+      if (cooldown !== null && isOnCooldown(cooldown.expiresAt, now)) {
         // Слово распознано, но на кулдауне — молчим и дальше не пускаем.
         return "handled";
       }
 
       const name = from.username ? `@${from.username}` : from.first_name;
-      const prediction = pickPrediction(pool, name);
-      if (prediction === null) {
+      // Анти-повтор «колода»: память недавно показанных ответов — в строке кулдауна.
+      const pick = pickPredictionNoRepeat(pool, cooldown?.recent ?? [], name);
+      if (pick === null) {
         return "pass";
       }
 
-      await ctx.reply(prediction, {
+      // Кулдаун потребляем только когда реально отвечаем (как в Python).
+      await saveCooldown(
+        deps.prisma,
+        channel.id,
+        userId,
+        matched,
+        nextExpiry(now, COOLDOWN_HOURS),
+        pick.recentKeys,
+      );
+
+      await ctx.reply(pick.text, {
         reply_parameters: { message_id: message.message_id },
       });
       deps.logger.info(

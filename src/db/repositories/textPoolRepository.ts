@@ -32,16 +32,43 @@ export async function getTextPool(
   return pool ? pool.texts : null;
 }
 
-/** Сводка по триггеру для списка в меню: слово + число ответов в его пуле. */
-export interface TriggerSummary {
-  readonly word: string;
-  readonly count: number;
+/** Пул с метаданными: тексты + дата последнего изменения (для свежести). */
+export interface TextPoolDetail {
+  texts: string[];
+  updatedAt: Date;
 }
 
 /**
- * Для каждого слова-триггера возвращает число ответов в его пуле (Шаг 3, экран
- * списка триггеров: «карта · 7 ответов ›»). Порядок повторяет `words` (порядок
- * канала). Слова без пула → 0.
+ * Возвращает тексты пула и его `updatedAt` по паре (channelId, key) или `null`.
+ * Нужен экрану триггера: и список ответов, и индикатор «обновлён N дн назад».
+ */
+export async function getTextPoolDetail(
+  prisma: PrismaClient,
+  channelId: string,
+  key: string,
+): Promise<TextPoolDetail | null> {
+  const pool = await prisma.textPool.findUnique({
+    where: { channelId_key: { channelId, key } },
+    select: { texts: true, updatedAt: true },
+  });
+  return pool ? { texts: pool.texts, updatedAt: pool.updatedAt } : null;
+}
+
+/**
+ * Сводка по триггеру для списка в меню: слово, число ответов и дата последнего
+ * изменения пула (`updatedAt`) — для индикатора свежести. `updatedAt = null`,
+ * если у слова ещё нет пула.
+ */
+export interface TriggerSummary {
+  readonly word: string;
+  readonly count: number;
+  readonly updatedAt: Date | null;
+}
+
+/**
+ * Для каждого слова-триггера возвращает число ответов и дату изменения пула
+ * (Шаг 3, экран списка: «карта · 7 ответов ›»; индикатор свежести). Порядок
+ * повторяет `words` (порядок канала). Слова без пула → 0 и `null`.
  */
 export async function listTriggerSummaries(
   prisma: PrismaClient,
@@ -50,10 +77,19 @@ export async function listTriggerSummaries(
 ): Promise<TriggerSummary[]> {
   const pools = await prisma.textPool.findMany({
     where: { channelId, key: { in: [...words] } },
-    select: { key: true, texts: true },
+    select: { key: true, texts: true, updatedAt: true },
   });
-  const counts = new Map(pools.map((p) => [p.key, p.texts.length]));
-  return words.map((word) => ({ word, count: counts.get(word) ?? 0 }));
+  const byKey = new Map(
+    pools.map((p) => [p.key, { count: p.texts.length, updatedAt: p.updatedAt }]),
+  );
+  return words.map((word) => {
+    const info = byKey.get(word);
+    return {
+      word,
+      count: info?.count ?? 0,
+      updatedAt: info?.updatedAt ?? null,
+    };
+  });
 }
 
 /** Добавляет один ответ в пул (создаёт пул, если его нет). Шаг 3. */

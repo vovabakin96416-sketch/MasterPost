@@ -1,11 +1,12 @@
 import { encodeCb } from "../../../core/menu/callbackData.js";
 import { paginate } from "../../../core/menu/paginate.js";
+import { poolHealth, poolAgeDays } from "../../../core/content/poolHealth.js";
 import {
   getActiveChannel,
   getChannelDisplay,
 } from "../../../db/repositories/channelRepository.js";
 import {
-  getTextPool,
+  getTextPoolDetail,
   listTriggerSummaries,
 } from "../../../db/repositories/textPoolRepository.js";
 import { getBooleanSetting } from "../../../db/repositories/settingRepository.js";
@@ -42,6 +43,19 @@ function pluralAnswers(n: number): string {
     return "ответа";
   }
   return "ответов";
+}
+
+/** Русское склонение «день / дня / дней». */
+function pluralDays(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return "день";
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    return "дня";
+  }
+  return "дней";
 }
 
 /**
@@ -94,12 +108,15 @@ export async function renderTriggers(
     channel.triggerWords,
   );
   const pg = paginate(summaries, page, PAGE_TRIGGERS);
+  const now = new Date();
 
   const rows: Btn[][] = pg.slice.map((item, i) => {
     const globalIdx = pg.page * PAGE_TRIGGERS + i;
+    // ⚠️ — пул мал или застоялся: владельцу видно, что пора освежить.
+    const warn = poolHealth(item.count, item.updatedAt, now).stale ? " ⚠️" : "";
     return [
       {
-        label: `${item.word} · ${String(item.count)} ${pluralAnswers(item.count)} ›`,
+        label: `${item.word} · ${String(item.count)} ${pluralAnswers(item.count)}${warn} ›`,
         data: encodeCb("tw", globalIdx, 0),
       },
     ];
@@ -137,7 +154,8 @@ export async function renderTrigger(
       keyboard: buildKeyboard([navRow(encodeCb("trg", 0))]),
     };
   }
-  const texts = (await getTextPool(deps.prisma, channel.id, word)) ?? [];
+  const detail = await getTextPoolDetail(deps.prisma, channel.id, word);
+  const texts = detail?.texts ?? [];
   const pg = paginate(texts, page, PAGE_ANSWERS);
 
   const rows: Btn[][] = pg.slice.map((text, i) => {
@@ -159,10 +177,22 @@ export async function renderTrigger(
   }
   rows.push(navRow(encodeCb("trg", 0)));
 
-  const header =
-    texts.length === 0
-      ? `🔑 Триггер «${word}»\n\nОтветов пока нет. Добавь первый — и бот начнёт отвечать на «${word}» в комментах.`
-      : `🔑 Триггер «${word}» — ${String(texts.length)} ${pluralAnswers(texts.length)}\n\nНажми ответ, чтобы изменить или удалить.`;
+  let header: string;
+  if (texts.length === 0) {
+    header = `🔑 Триггер «${word}»\n\nОтветов пока нет. Добавь первый — и бот начнёт отвечать на «${word}» в комментах.`;
+  } else {
+    const now = new Date();
+    const health = poolHealth(texts.length, detail?.updatedAt ?? null, now);
+    const age = poolAgeDays(detail?.updatedAt ?? null, now);
+    const ageLine =
+      age === null ? "" : `\nОбновлён ${String(age)} ${pluralDays(age)} назад.`;
+    const hint = health.stale
+      ? health.reason === "few"
+        ? "\n⚠️ Мало ответов — добавь ещё, чтобы не приедались."
+        : "\n⚠️ Давно не обновлялся — освежи ответы."
+      : "";
+    header = `🔑 Триггер «${word}» — ${String(texts.length)} ${pluralAnswers(texts.length)}${ageLine}${hint}\n\nНажми ответ, чтобы изменить или удалить.`;
+  }
   return { text: header, keyboard: buildKeyboard(rows) };
 }
 
@@ -183,7 +213,8 @@ export async function renderAnswer(
       keyboard: buildKeyboard([navRow(encodeCb("trg", 0))]),
     };
   }
-  const texts = (await getTextPool(deps.prisma, channel.id, word)) ?? [];
+  const detail = await getTextPoolDetail(deps.prisma, channel.id, word);
+  const texts = detail?.texts ?? [];
   const answer = texts[answerIdx];
   if (answer === undefined) {
     return {
@@ -246,6 +277,15 @@ export async function renderStatus(deps: AdminDeps): Promise<Screen> {
   const title = display?.title ?? "—";
   const username = display?.username ? `@${display.username}` : "—";
 
+  const now = new Date();
+  const staleWords = summaries
+    .filter((s) => poolHealth(s.count, s.updatedAt, now).stale)
+    .map((s) => s.word);
+  const freshness =
+    staleWords.length === 0
+      ? "Свежесть пулов: все ок ✅"
+      : `⚠️ Освежить пулы: ${staleWords.join(", ")}`;
+
   const lines = [
     "📊 Статус",
     "",
@@ -254,6 +294,7 @@ export async function renderStatus(deps: AdminDeps): Promise<Screen> {
     `Ответов всего: ${String(totalAnswers)}`,
     `Ответы в комментах: ${commentsOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
     `Кулдаун: ${String(COOLDOWN_HOURS)} ч`,
+    freshness,
   ];
   return { text: lines.join("\n"), keyboard: buildKeyboard([navRow()]) };
 }

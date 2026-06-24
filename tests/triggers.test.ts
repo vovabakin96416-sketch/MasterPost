@@ -4,7 +4,8 @@ import {
   normalizeTriggerText,
 } from "../src/core/triggers/matchTrigger";
 import {
-  pickPrediction,
+  answerKey,
+  pickPredictionNoRepeat,
   renderTemplate,
 } from "../src/core/triggers/pickPrediction";
 import { isOnCooldown, nextExpiry } from "../src/core/triggers/cooldown";
@@ -52,22 +53,51 @@ describe("matchTrigger (слова из конфига канала)", () => {
   });
 });
 
-describe("renderTemplate / pickPrediction", () => {
+describe("renderTemplate / pickPredictionNoRepeat", () => {
   it("подставляет имя во все вхождения {name}", () => {
     expect(renderTemplate("Привет, {name}! Как ты, {name}?", { name: "@anna" })).toBe(
       "Привет, @anna! Как ты, @anna?",
     );
   });
 
-  it("детерминированный выбор при фиксированном rng", () => {
+  it("детерминированный выбор при фиксированном rng (память пуста)", () => {
     const pool = ["{name}: A", "{name}: B", "{name}: C"];
-    expect(pickPrediction(pool, "@anna", () => 0)).toBe("@anna: A");
-    expect(pickPrediction(pool, "@anna", () => 0.99)).toBe("@anna: C");
-    expect(pickPrediction(pool, "@anna", () => 0.5)).toBe("@anna: B");
+    expect(pickPredictionNoRepeat(pool, [], "@anna", () => 0)?.text).toBe("@anna: A");
+    expect(pickPredictionNoRepeat(pool, [], "@anna", () => 0.99)?.text).toBe("@anna: C");
   });
 
   it("пустой пул → null", () => {
-    expect(pickPrediction([], "@anna")).toBeNull();
+    expect(pickPredictionNoRepeat([], [], "@anna")).toBeNull();
+  });
+
+  it("«колода»: за цикл из N розыгрышей ни одного повтора, потом цикл заново", () => {
+    const pool = ["A", "B", "C"];
+    // rng всегда 0 → берём первого кандидата; исключения двигают «колоду».
+    const rng = (): number => 0;
+    let recent: string[] = [];
+    const seq: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const pick = pickPredictionNoRepeat(pool, recent, "x", rng);
+      expect(pick).not.toBeNull();
+      if (pick === null) return;
+      seq.push(pick.text);
+      recent = pick.recentKeys;
+    }
+    // Каждое окно из 3 подряд — все три разные (нет повторов до исчерпания).
+    expect(new Set(seq.slice(0, 3)).size).toBe(3);
+    expect(new Set(seq.slice(3, 6)).size).toBe(3);
+  });
+
+  it("память не длиннее N−1 и переживает сжатие пула", () => {
+    const pick = pickPredictionNoRepeat(["A", "B", "C"], ["zzz", "yyy"], "x", () => 0);
+    expect(pick).not.toBeNull();
+    // Старые «мёртвые» ключи (zzz/yyy не из пула) отброшены, длина ≤ 2.
+    expect(pick?.recentKeys.length).toBeLessThanOrEqual(2);
+  });
+
+  it("answerKey стабилен и зависит от содержимого", () => {
+    expect(answerKey("одинаковый")).toBe(answerKey("одинаковый"));
+    expect(answerKey("A")).not.toBe(answerKey("B"));
   });
 });
 
