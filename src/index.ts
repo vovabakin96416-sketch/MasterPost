@@ -34,7 +34,7 @@ async function main(): Promise<void> {
 
   const server = startHealthServer(env.PORT, logger);
   const prisma = createPrismaClient(env.DATABASE_URL);
-  const bot = createBot(env.BOT_TOKEN, { prisma, logger });
+  const bot = createBot(env.BOT_TOKEN, { prisma, logger, adminId: env.ADMIN_ID });
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutting down");

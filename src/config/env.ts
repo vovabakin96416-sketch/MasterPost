@@ -16,6 +16,10 @@ export const envSchema = z.object({
   DATABASE_URL: z
     .string({ required_error: "DATABASE_URL обязателен (строка подключения к PostgreSQL)" })
     .min(1, "DATABASE_URL не должен быть пустым"),
+  ADMIN_ID: z.coerce
+    .number({ required_error: "ADMIN_ID обязателен (твой Telegram user id)" })
+    .int("ADMIN_ID должен быть целым числом")
+    .positive("ADMIN_ID должен быть положительным"),
 });
 
 export type Env = z.infer<typeof envSchema>;

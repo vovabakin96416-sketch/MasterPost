@@ -1,0 +1,294 @@
+import { encodeCb } from "../../../core/menu/callbackData.js";
+import { paginate } from "../../../core/menu/paginate.js";
+import {
+  getActiveChannel,
+  getChannelDisplay,
+} from "../../../db/repositories/channelRepository.js";
+import {
+  getTextPool,
+  listTriggerSummaries,
+} from "../../../db/repositories/textPoolRepository.js";
+import { getBooleanSetting } from "../../../db/repositories/settingRepository.js";
+import { buildKeyboard, navRow, pageRow, preview, type Btn } from "./keyboard.js";
+import type { AdminDeps, Screen } from "./types.js";
+
+/**
+ * Рендереры экранов меню. Каждый возвращает `Screen` (текст + клавиатура).
+ * Тематики в коде нет — слова/ответы/настройки берутся из данных канала.
+ *
+ * Навигация и пагинация — через хелперы `keyboard.ts`; callback-data — через
+ * `core/menu/callbackData`. Новый раздел добавляется записью в `MAIN_SECTIONS`
+ * плюс своим рендерером и веткой роутера.
+ */
+
+/** Кулдаун триггеров, часов (read-only в меню; синхронно с triggerStage). */
+const COOLDOWN_HOURS = 24;
+
+/** Сколько триггеров/ответов показываем на одной странице списка. */
+const PAGE_TRIGGERS = 8;
+const PAGE_ANSWERS = 6;
+
+/** Ключ настройки «отвечать в комментах» (как в Шаге 2). */
+const COMMENTS_KEY = "comments_enabled";
+
+/** Русское склонение «ответ / ответа / ответов». */
+function pluralAnswers(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return "ответ";
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    return "ответа";
+  }
+  return "ответов";
+}
+
+/**
+ * Раздел главного меню. `soon: true` — задел под будущие функции (Шаги 4/5/11):
+ * кнопка видна, но ведёт на заглушку-тост. Новый раздел = одна запись здесь.
+ */
+interface Section {
+  readonly label: string;
+  readonly data: string;
+}
+
+export const MAIN_SECTIONS: readonly Section[] = [
+  { label: "💬 Триггеры", data: encodeCb("trg", 0) },
+  { label: "⚙️ Настройки", data: encodeCb("set") },
+  { label: "📊 Статус", data: encodeCb("stat") },
+  { label: "⏳ Автопостинг (скоро)", data: encodeCb("soon") },
+  { label: "⏳ Одобрение постов (скоро)", data: encodeCb("soon") },
+  { label: "⏳ AI-ответы (скоро)", data: encodeCb("soon") },
+];
+
+/** Экран-заглушка, когда активного канала нет (не запущен сид). */
+function noChannelScreen(): Screen {
+  return {
+    text: "Активный канал не найден. Запусти сид: `npm run seed`.",
+    keyboard: buildKeyboard([navRow()]),
+  };
+}
+
+/** Экран 1 — главное меню. */
+export function renderMain(): Screen {
+  const rows = MAIN_SECTIONS.map((s): Btn[] => [{ label: s.label, data: s.data }]);
+  return {
+    text: "🤖 Меню управления каналом\n\nВыбери раздел:",
+    keyboard: buildKeyboard(rows),
+  };
+}
+
+/** Экран 2 — список слов-триггеров со счётчиком ответов. */
+export async function renderTriggers(
+  deps: AdminDeps,
+  page: number,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const summaries = await listTriggerSummaries(
+    deps.prisma,
+    channel.id,
+    channel.triggerWords,
+  );
+  const pg = paginate(summaries, page, PAGE_TRIGGERS);
+
+  const rows: Btn[][] = pg.slice.map((item, i) => {
+    const globalIdx = pg.page * PAGE_TRIGGERS + i;
+    return [
+      {
+        label: `${item.word} · ${String(item.count)} ${pluralAnswers(item.count)} ›`,
+        data: encodeCb("tw", globalIdx, 0),
+      },
+    ];
+  });
+  rows.push([{ label: "➕ Добавить триггер", data: encodeCb("addw") }]);
+  const pager = pageRow(pg.page, pg.hasPrev, pg.hasNext, (p) =>
+    encodeCb("trg", p),
+  );
+  if (pager.length > 0) {
+    rows.push(pager);
+  }
+  rows.push(navRow());
+
+  const header =
+    summaries.length === 0
+      ? "💬 Триггеры\n\nПока нет ни одного слова. Добавь первое."
+      : `💬 Триггеры (${String(summaries.length)})\n\nСлова, на которые бот отвечает в комментах. Нажми слово, чтобы открыть ответы.`;
+  return { text: header, keyboard: buildKeyboard(rows) };
+}
+
+/** Экран 3 — один триггер: его ответы + действия. */
+export async function renderTrigger(
+  deps: AdminDeps,
+  wordIdx: number,
+  page: number,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const word = channel.triggerWords[wordIdx];
+  if (word === undefined) {
+    return {
+      text: "Триггер не найден — возможно, он был удалён.",
+      keyboard: buildKeyboard([navRow(encodeCb("trg", 0))]),
+    };
+  }
+  const texts = (await getTextPool(deps.prisma, channel.id, word)) ?? [];
+  const pg = paginate(texts, page, PAGE_ANSWERS);
+
+  const rows: Btn[][] = pg.slice.map((text, i) => {
+    const globalIdx = pg.page * PAGE_ANSWERS + i;
+    return [
+      {
+        label: `${String(globalIdx + 1)}. ${preview(text)}`,
+        data: encodeCb("ans", wordIdx, globalIdx),
+      },
+    ];
+  });
+  rows.push([{ label: "➕ Добавить ответ", data: encodeCb("adda", wordIdx) }]);
+  rows.push([{ label: "🗑 Удалить триггер", data: encodeCb("delw", wordIdx) }]);
+  const pager = pageRow(pg.page, pg.hasPrev, pg.hasNext, (p) =>
+    encodeCb("tw", wordIdx, p),
+  );
+  if (pager.length > 0) {
+    rows.push(pager);
+  }
+  rows.push(navRow(encodeCb("trg", 0)));
+
+  const header =
+    texts.length === 0
+      ? `🔑 Триггер «${word}»\n\nОтветов пока нет. Добавь первый — и бот начнёт отвечать на «${word}» в комментах.`
+      : `🔑 Триггер «${word}» — ${String(texts.length)} ${pluralAnswers(texts.length)}\n\nНажми ответ, чтобы изменить или удалить.`;
+  return { text: header, keyboard: buildKeyboard(rows) };
+}
+
+/** Экран 4 — один ответ: полный текст + изменить/удалить. */
+export async function renderAnswer(
+  deps: AdminDeps,
+  wordIdx: number,
+  answerIdx: number,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const word = channel.triggerWords[wordIdx];
+  if (word === undefined) {
+    return {
+      text: "Триггер не найден — возможно, он был удалён.",
+      keyboard: buildKeyboard([navRow(encodeCb("trg", 0))]),
+    };
+  }
+  const texts = (await getTextPool(deps.prisma, channel.id, word)) ?? [];
+  const answer = texts[answerIdx];
+  if (answer === undefined) {
+    return {
+      text: "Ответ не найден — возможно, он был удалён.",
+      keyboard: buildKeyboard([navRow(encodeCb("tw", wordIdx, 0))]),
+    };
+  }
+  return {
+    text: `Ответ #${String(answerIdx + 1)} для «${word}»:\n\n${answer}`,
+    keyboard: buildKeyboard([
+      [
+        { label: "✏️ Изменить", data: encodeCb("edita", wordIdx, answerIdx) },
+        { label: "🗑 Удалить", data: encodeCb("dela", wordIdx, answerIdx) },
+      ],
+      navRow(encodeCb("tw", wordIdx, 0)),
+    ]),
+  };
+}
+
+/** Экран — настройки (тумблеры). */
+export async function renderSettings(deps: AdminDeps): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const commentsOn = await getBooleanSetting(
+    deps.prisma,
+    channel.id,
+    COMMENTS_KEY,
+    true,
+  );
+  return {
+    text: "⚙️ Настройки",
+    keyboard: buildKeyboard([
+      [
+        {
+          label: `💬 Ответы в комментах: ${commentsOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+          data: encodeCb("tgl", "comments"),
+        },
+      ],
+      [{ label: "🤖 AI-ответы: скоро ⏳", data: encodeCb("soon") }],
+      [{ label: `⏱ Кулдаун: ${String(COOLDOWN_HOURS)} ч`, data: encodeCb("soon") }],
+      navRow(),
+    ]),
+  };
+}
+
+/** Экран — статус канала (сводка). */
+export async function renderStatus(deps: AdminDeps): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const [display, summaries, commentsOn] = await Promise.all([
+    getChannelDisplay(deps.prisma, channel.id),
+    listTriggerSummaries(deps.prisma, channel.id, channel.triggerWords),
+    getBooleanSetting(deps.prisma, channel.id, COMMENTS_KEY, true),
+  ]);
+  const totalAnswers = summaries.reduce((sum, s) => sum + s.count, 0);
+  const title = display?.title ?? "—";
+  const username = display?.username ? `@${display.username}` : "—";
+
+  const lines = [
+    "📊 Статус",
+    "",
+    `Канал: ${title} (${username})`,
+    `Триггеров: ${String(channel.triggerWords.length)}`,
+    `Ответов всего: ${String(totalAnswers)}`,
+    `Ответы в комментах: ${commentsOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+    `Кулдаун: ${String(COOLDOWN_HOURS)} ч`,
+  ];
+  return { text: lines.join("\n"), keyboard: buildKeyboard([navRow()]) };
+}
+
+/** Экран-приглашение: жду слово-триггер. */
+export function renderAddTriggerPrompt(): Screen {
+  return {
+    text:
+      "➕ Новый триггер\n\nПришли слово одним сообщением (например: звезда).\n" +
+      "Бот будет отвечать на него в комментах после добавления ответов.",
+    keyboard: buildKeyboard([navRow(encodeCb("trg", 0))]),
+  };
+}
+
+/** Экран-приглашение: жду текст нового ответа для слова. */
+export function renderAddAnswerPrompt(word: string, wordIdx: number): Screen {
+  return {
+    text:
+      `➕ Новый ответ для «${word}»\n\nПришли текст одним сообщением.\n` +
+      "Можно использовать {name} — подставится имя пользователя.",
+    keyboard: buildKeyboard([navRow(encodeCb("tw", wordIdx, 0))]),
+  };
+}
+
+/** Экран-приглашение: жду новый текст для редактируемого ответа. */
+export function renderEditAnswerPrompt(
+  word: string,
+  wordIdx: number,
+  answerIdx: number,
+  current: string,
+): Screen {
+  return {
+    text:
+      `✏️ Изменить ответ #${String(answerIdx + 1)} для «${word}»\n\n` +
+      `Текущий текст:\n${current}\n\nПришли новый текст одним сообщением.`,
+    keyboard: buildKeyboard([navRow(encodeCb("ans", wordIdx, answerIdx))]),
+  };
+}
