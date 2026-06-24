@@ -7,10 +7,15 @@ import type { ChannelSeed } from "../db/repositories/channelRepository.js";
  *
  * triggerWords (карта/кофе/руна) подхватит Шаг 2; campaignStart выставим на
  * Шаге 4 при запуске автопостинга.
+ *
+ * chatId — цель автопостинга (Шаг 4). СЕЙЧАС это тестовый канал @supertestmaster
+ * (чтобы не дублировать публикации в живой @sofia_gada1ka, который ведёт Python-бот).
+ * Для прода поменять на реальный канал — это данные, код не меняется.
  */
 export const taroChannel: ChannelSeed = {
   title: "Таро · София",
   username: "sofia_gada1ka",
+  chatId: "@supertestmaster",
   niche: "эзотерика/таро",
   language: "ru",
   region: "RU",

@@ -4,7 +4,12 @@ import { poolHealth, poolAgeDays } from "../../../core/content/poolHealth.js";
 import {
   getActiveChannel,
   getChannelDisplay,
+  getPostingChannel,
 } from "../../../db/repositories/channelRepository.js";
+import { readAutopostConfig } from "../../../services/autopostSettings.js";
+import { localDateParts } from "../../../core/schedule/localDate.js";
+import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js";
+import type { SlotName } from "../../../core/schedule/dueSlots.js";
 import {
   getTextPoolDetail,
   listTriggerSummaries,
@@ -71,10 +76,21 @@ export const MAIN_SECTIONS: readonly Section[] = [
   { label: "💬 Триггеры", data: encodeCb("trg", 0) },
   { label: "⚙️ Настройки", data: encodeCb("set") },
   { label: "📊 Статус", data: encodeCb("stat") },
-  { label: "⏳ Автопостинг (скоро)", data: encodeCb("soon") },
+  { label: "📅 Автопостинг", data: encodeCb("auto") },
   { label: "⏳ Одобрение постов (скоро)", data: encodeCb("soon") },
   { label: "⏳ AI-ответы (скоро)", data: encodeCb("soon") },
 ];
+
+/** Дни недели по-русски для экрана автопостинга. */
+const DAY_RU: Record<string, string> = {
+  monday: "понедельник",
+  tuesday: "вторник",
+  wednesday: "среда",
+  thursday: "четверг",
+  friday: "пятница",
+  saturday: "суббота",
+  sunday: "воскресенье",
+};
 
 /** Экран-заглушка, когда активного канала нет (не запущен сид). */
 function noChannelScreen(): Screen {
@@ -316,6 +332,61 @@ export function renderAddAnswerPrompt(word: string, wordIdx: number): Screen {
       `➕ Новый ответ для «${word}»\n\nПришли текст одним сообщением.\n` +
       "Можно использовать {name} — подставится имя пользователя.",
     keyboard: buildKeyboard([navRow(encodeCb("tw", wordIdx, 0))]),
+  };
+}
+
+/** Экран — автопостинг (Шаг 4): статус, цель, текущая неделя/день, времена, действия. */
+export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
+  const channel = await getPostingChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const config = await readAutopostConfig(deps.prisma, channel.id);
+  const today = localDateParts(new Date(), channel.timezone);
+  const start =
+    channel.campaignStart === null
+      ? null
+      : localDateParts(channel.campaignStart, channel.timezone);
+  const { week, day } = resolveCampaignDay(today, start);
+  const last = (d: string | null): string => d ?? "—";
+
+  const lines = [
+    "📅 Автопостинг",
+    "",
+    `Статус: ${config.enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+    `Канал публикации: ${channel.chatId ?? "не задан ⚠️"}`,
+    `Сейчас: неделя ${String(week)}, ${DAY_RU[day] ?? day}`,
+    `🌅 Утро: ${config.times.morning} · последний: ${last(config.last.morning)}`,
+    `🌙 Вечер: ${config.times.evening} · последний: ${last(config.last.evening)}`,
+    `Пояс: ${channel.timezone}`,
+  ];
+
+  const keyboard = buildKeyboard([
+    [
+      {
+        label: config.enabled ? "🔇 Выключить" : "✅ Включить",
+        data: encodeCb("atgl"),
+      },
+    ],
+    [
+      { label: `🌅 Утро: ${config.times.morning}`, data: encodeCb("amt") },
+      { label: `🌙 Вечер: ${config.times.evening}`, data: encodeCb("aet") },
+    ],
+    [{ label: "📤 Опубликовать сейчас: утро", data: encodeCb("apub", "morning") }],
+    [{ label: "📤 Опубликовать сейчас: вечер", data: encodeCb("apub", "evening") }],
+    navRow(),
+  ]);
+  return { text: lines.join("\n"), keyboard };
+}
+
+/** Экран-приглашение: жду время публикации слота (ЧЧ:ММ). */
+export function renderSetTimePrompt(slot: SlotName, current: string): Screen {
+  const name = slot === "morning" ? "утреннего" : "вечернего";
+  return {
+    text:
+      `⏰ Время ${name} поста\n\nТекущее: ${current}\n` +
+      "Пришли новое время в формате ЧЧ:ММ (например, 10:00).",
+    keyboard: buildKeyboard([navRow(encodeCb("auto"))]),
   };
 }
 

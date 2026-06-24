@@ -7,6 +7,7 @@
  */
 
 import { normalizeTriggerText } from "../triggers/matchTrigger.js";
+import { parseTime } from "../schedule/dueSlots.js";
 
 /** Максимальная длина ответа-предсказания (запас под лимит сообщения Telegram). */
 export const MAX_ANSWER_LENGTH = 3500;
@@ -59,4 +60,22 @@ export function validateTriggerWord(
     }
   }
   return { ok: true, value: trimmed };
+}
+
+/**
+ * Проверяет ввод времени публикации (Шаг 4): формат "HH:MM", 00:00–23:59.
+ * Возвращает нормализованную форму с ведущим нулём ("9:5" → "09:05").
+ */
+export function validateTime(input: string): ValidationResult {
+  const minutes = parseTime(input);
+  if (minutes === null) {
+    return {
+      ok: false,
+      error: "Неверное время. Пришлите в формате ЧЧ:ММ, например 10:00.",
+    };
+  }
+  const hh = Math.floor(minutes / 60);
+  const mm = minutes % 60;
+  const pad = (n: number): string => (n < 10 ? `0${String(n)}` : String(n));
+  return { ok: true, value: `${pad(hh)}:${pad(mm)}` };
 }

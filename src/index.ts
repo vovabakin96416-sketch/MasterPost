@@ -3,6 +3,7 @@ import { parseEnv } from "./config/env.js";
 import { createLogger } from "./lib/logger.js";
 import { createPrismaClient } from "./db/client.js";
 import { createBot } from "./telegram/bot.js";
+import { startScheduler } from "./scheduler/index.js";
 import { startHealthServer } from "./server/health.js";
 
 // Локально подхватываем .env (на хостинге переменные приходят из платформы,
@@ -36,8 +37,17 @@ async function main(): Promise<void> {
   const prisma = createPrismaClient(env.DATABASE_URL);
   const bot = createBot(env.BOT_TOKEN, { prisma, logger, adminId: env.ADMIN_ID });
 
+  // Шаг 4: планировщик автопостинга (тик раз в минуту через bot.api).
+  const scheduler = startScheduler({
+    prisma,
+    logger,
+    api: bot.api,
+    adminId: env.ADMIN_ID,
+  });
+
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutting down");
+    scheduler.stop();
     void bot.stop();
     server.close();
     void prisma.$disconnect();

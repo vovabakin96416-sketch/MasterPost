@@ -4,6 +4,7 @@ import type { PrismaClient } from "../client.js";
 export interface ChannelSeed {
   title: string;
   username: string;
+  chatId: string | null;
   niche: string;
   language: string;
   region: string | null;
@@ -49,6 +50,38 @@ export async function getActiveChannel(
   return prisma.channel.findFirst({
     where: { isActive: true },
     select: { id: true, triggerWords: true },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+/** Канал в форме, нужной автопостингу (Шаг 4): цель + пояс + старт кампании. */
+export interface PostingChannel {
+  id: string;
+  chatId: string | null;
+  timezone: string;
+  campaignStart: Date | null;
+  title: string;
+  username: string | null;
+}
+
+/**
+ * Возвращает единственный активный канал для автопостинга/планировщика (или `null`).
+ * Отдаёт цель публикации (`chatId`), пояс и старт кампании — всё, что нужно, чтобы
+ * посчитать «пост на сегодня» и отправить его. На Шаге 4 канал один (как и триггеры).
+ */
+export async function getPostingChannel(
+  prisma: PrismaClient,
+): Promise<PostingChannel | null> {
+  return prisma.channel.findFirst({
+    where: { isActive: true },
+    select: {
+      id: true,
+      chatId: true,
+      timezone: true,
+      campaignStart: true,
+      title: true,
+      username: true,
+    },
     orderBy: { createdAt: "asc" },
   });
 }

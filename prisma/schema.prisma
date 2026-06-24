@@ -45,6 +45,7 @@ model Channel {
   id            String    @id @default(cuid())
   title         String
   username      String?   @unique // @sofia_gada1ka и т.п.
+  chatId        String? // цель публикации автопостинга: @username или числовой -100… (Шаг 4)
   niche         String // эзотерика / новости / бизнес — любая ниша
   language      String    @default("ru")
   region        String?

@@ -42,6 +42,40 @@ export async function setBooleanSetting(
 }
 
 /**
+ * Читает строковую настройку (времена слотов, даты последней публикации — Шаг 4).
+ * Если записи нет или значение не строка — возвращает `defaultValue`.
+ */
+export async function getStringSetting(
+  prisma: PrismaClient,
+  channelId: string,
+  key: string,
+  defaultValue: string | null,
+): Promise<string | null> {
+  const row = await prisma.setting.findUnique({
+    where: { channelId_key: { channelId, key } },
+    select: { value: true },
+  });
+  if (!row) {
+    return defaultValue;
+  }
+  return typeof row.value === "string" ? row.value : defaultValue;
+}
+
+/** Записывает строковую настройку (upsert по паре channelId+key). Шаг 4. */
+export async function setStringSetting(
+  prisma: PrismaClient,
+  channelId: string,
+  key: string,
+  value: string,
+): Promise<void> {
+  await prisma.setting.upsert({
+    where: { channelId_key: { channelId, key } },
+    create: { channelId, key, value },
+    update: { value },
+  });
+}
+
+/**
  * Переключает булеву настройку и возвращает новое значение. Тумблеры меню
  * (`comments_enabled` и т.п.). `defaultValue` — что считать текущим, если записи
  * ещё нет (для `comments_enabled` это `true`, как в Python DEFAULT_SETTINGS).

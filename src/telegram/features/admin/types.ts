@@ -1,6 +1,7 @@
 import type { InlineKeyboard } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../../../db/client.js";
+import type { SlotName } from "../../../core/schedule/dueSlots.js";
 
 /**
  * Меню админа (Шаг 3) — изолированный Composer `adminMenu`. Порт `cmd_menu` /
@@ -33,4 +34,5 @@ export interface Screen {
 export type PendingInput =
   | { readonly kind: "addTrigger" }
   | { readonly kind: "addAnswer"; readonly word: string }
-  | { readonly kind: "editAnswer"; readonly word: string; readonly index: number };
+  | { readonly kind: "editAnswer"; readonly word: string; readonly index: number }
+  | { readonly kind: "setTime"; readonly slot: SlotName };

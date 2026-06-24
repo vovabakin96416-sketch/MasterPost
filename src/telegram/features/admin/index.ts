@@ -2,8 +2,20 @@ import { Composer, type Context, GrammyError } from "grammy";
 import { decodeCb, intArg } from "../../../core/menu/callbackData.js";
 import {
   validateAnswer,
+  validateTime,
   validateTriggerWord,
 } from "../../../core/menu/validation.js";
+import {
+  readAutopostConfig,
+  setSlotTime,
+  toggleAutopost,
+} from "../../../services/autopostSettings.js";
+import {
+  publishNow,
+  type PostingDeps,
+  type PublishNowResult,
+} from "../../../services/postingService.js";
+import type { SlotName } from "../../../core/schedule/dueSlots.js";
 import {
   addTrigger,
   getActiveChannel,
@@ -21,7 +33,9 @@ import {
   renderAddTriggerPrompt,
   renderAnswer,
   renderEditAnswerPrompt,
+  renderAutopost,
   renderMain,
+  renderSetTimePrompt,
   renderSettings,
   renderStatus,
   renderTrigger,
@@ -138,6 +152,62 @@ async function routeCallback(
       await editScreen(ctx, await renderStatus(deps));
       await ctx.answerCallbackQuery();
       return;
+
+    case "auto":
+      await editScreen(ctx, await renderAutopost(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "atgl": {
+      const channel = await getActiveChannel(deps.prisma);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleAutopost(deps.prisma, channel.id);
+      await editScreen(ctx, await renderAutopost(deps));
+      await ctx.answerCallbackQuery({
+        text: next ? "Автопостинг включён" : "Автопостинг выключен",
+      });
+      return;
+    }
+
+    case "amt":
+    case "aet": {
+      const slot: SlotName = action === "amt" ? "morning" : "evening";
+      const channel = await getActiveChannel(deps.prisma);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const config = await readAutopostConfig(deps.prisma, channel.id);
+      const current =
+        slot === "morning" ? config.times.morning : config.times.evening;
+      pending.set(adminId, { kind: "setTime", slot });
+      await editScreen(ctx, renderSetTimePrompt(slot, current));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "apub": {
+      const slot = parseSlot(args[0]);
+      if (slot === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const postingDeps: PostingDeps = {
+        prisma: deps.prisma,
+        logger: deps.logger,
+        api: ctx.api,
+        adminId: deps.adminId,
+      };
+      const result = await publishNow(postingDeps, slot);
+      await ctx.answerCallbackQuery({
+        text: publishResultText(result),
+        show_alert: !result.ok,
+      });
+      return;
+    }
 
     case "tw": {
       const wIdx = intArg(args, 0);
@@ -334,6 +404,43 @@ async function handleInput(
       await sendScreen(ctx, await renderTriggerByWord(deps, state.word));
       return;
     }
+
+    case "setTime": {
+      const result = validateTime(text);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}`);
+        return; // остаёмся в режиме ввода
+      }
+      await setSlotTime(deps.prisma, channel.id, state.slot, result.value);
+      pending.delete(deps.adminId);
+      const name = state.slot === "morning" ? "утра" : "вечера";
+      await ctx.reply(`✅ Время ${name}: ${result.value}`);
+      await sendScreen(ctx, await renderAutopost(deps));
+      return;
+    }
+  }
+}
+
+/** Разбирает аргумент слота из callback-data ("morning"/"evening") или null. */
+function parseSlot(raw: string | undefined): SlotName | null {
+  if (raw === "morning" || raw === "evening") {
+    return raw;
+  }
+  return null;
+}
+
+/** Текст тоста по результату ручной публикации. */
+function publishResultText(result: PublishNowResult): string {
+  if (result.ok) {
+    return `✅ Опубликовано (неделя ${String(result.week)})`;
+  }
+  switch (result.reason) {
+    case "no_channel":
+      return "Канал не найден. Запусти сид: npm run seed.";
+    case "no_target":
+      return "Не задан канал публикации (chatId). Укажите его в настройках канала.";
+    case "no_post":
+      return "На сегодня нет поста для этого слота.";
   }
 }
 
