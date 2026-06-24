@@ -2,7 +2,6 @@ import { Prisma } from "../../generated/prisma/client.js";
 import type { PrismaClient } from "../client.js";
 import type { PostSeed } from "../../core/content/postSchema.js";
 import type { Weekday } from "../../core/schedule/localDate.js";
-import type { SlotName } from "../../core/schedule/dueSlots.js";
 
 /** Пост, готовый к публикации (Шаг 4 — только текст; фото/кнопки — Шаги 5–6). */
 export interface PostToPublish {
@@ -12,20 +11,22 @@ export interface PostToPublish {
 }
 
 /**
- * Находит пост канала на сегодня по (неделя, день, слот) — порт `get_post_for_today`.
- * Возвращает только текстовые поля (Шаг 4); `null`, если поста нет.
+ * Возвращает посты канала на день (неделя+день) по порядку их собственного времени.
+ *
+ * Доработка 4.1: расписание больше не делит посты на «утро/вечер». Берём все посты
+ * дня, упорядоченные по полю `time` (затем `externalId`), и публикуем их по порядку
+ * в заданные админом времена. Только текстовые поля (Шаг 4).
  */
-export async function getPostForToday(
+export async function getPostsForDay(
   prisma: PrismaClient,
   channelId: string,
   week: number,
   day: Weekday,
-  slot: SlotName,
-): Promise<PostToPublish | null> {
-  return prisma.post.findFirst({
-    where: { channelId, week, day, slot },
+): Promise<PostToPublish[]> {
+  return prisma.post.findMany({
+    where: { channelId, week, day },
     select: { title: true, text: true, cta: true },
-    orderBy: { externalId: "asc" },
+    orderBy: [{ time: "asc" }, { externalId: "asc" }],
   });
 }
 

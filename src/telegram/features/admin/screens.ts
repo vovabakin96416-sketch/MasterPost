@@ -9,7 +9,6 @@ import {
 import { readAutopostConfig } from "../../../services/autopostSettings.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js";
-import type { SlotName } from "../../../core/schedule/dueSlots.js";
 import {
   getTextPoolDetail,
   listTriggerSummaries,
@@ -335,7 +334,7 @@ export function renderAddAnswerPrompt(word: string, wordIdx: number): Screen {
   };
 }
 
-/** Экран — автопостинг (Шаг 4): статус, цель, текущая неделя/день, времена, действия. */
+/** Экран — автопостинг (Доработка 4.1): статус, канал, неделя/день, список времён. */
 export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
   const channel = await getPostingChannel(deps.prisma);
   if (channel === null) {
@@ -348,7 +347,11 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
       ? null
       : localDateParts(channel.campaignStart, channel.timezone);
   const { week, day } = resolveCampaignDay(today, start);
-  const last = (d: string | null): string => d ?? "—";
+
+  const timesLine =
+    config.times.length === 0
+      ? "Времена публикации: пока нет — добавь ниже."
+      : `Времена публикации (${String(config.times.length)}): ${config.times.join(", ")}`;
 
   const lines = [
     "📅 Автопостинг",
@@ -356,36 +359,49 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
     `Статус: ${config.enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
     `Канал публикации: ${channel.chatId ?? "не задан ⚠️"}`,
     `Сейчас: неделя ${String(week)}, ${DAY_RU[day] ?? day}`,
-    `🌅 Утро: ${config.times.morning} · последний: ${last(config.last.morning)}`,
-    `🌙 Вечер: ${config.times.evening} · последний: ${last(config.last.evening)}`,
+    timesLine,
     `Пояс: ${channel.timezone}`,
+    "",
+    "Бот публикует посты дня по порядку в эти времена.",
   ];
 
-  const keyboard = buildKeyboard([
+  const rows: Btn[][] = [
     [
       {
         label: config.enabled ? "🔇 Выключить" : "✅ Включить",
         data: encodeCb("atgl"),
       },
     ],
-    [
-      { label: `🌅 Утро: ${config.times.morning}`, data: encodeCb("amt") },
-      { label: `🌙 Вечер: ${config.times.evening}`, data: encodeCb("aet") },
-    ],
-    [{ label: "📤 Опубликовать сейчас: утро", data: encodeCb("apub", "morning") }],
-    [{ label: "📤 Опубликовать сейчас: вечер", data: encodeCb("apub", "evening") }],
-    navRow(),
-  ]);
-  return { text: lines.join("\n"), keyboard };
+    [{ label: "📡 Указать канал", data: encodeCb("achan") }],
+  ];
+  // По строке на каждое время — нажатие удаляет его.
+  config.times.forEach((t, i) => {
+    rows.push([{ label: `🕐 ${t}   ✖ удалить`, data: encodeCb("atdel", i) }]);
+  });
+  rows.push([{ label: "➕ Добавить время", data: encodeCb("atadd") }]);
+  rows.push([{ label: "📤 Опубликовать сейчас (тест)", data: encodeCb("apub") }]);
+  rows.push(navRow());
+
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }
 
-/** Экран-приглашение: жду время публикации слота (ЧЧ:ММ). */
-export function renderSetTimePrompt(slot: SlotName, current: string): Screen {
-  const name = slot === "morning" ? "утреннего" : "вечернего";
+/** Экран-приглашение: жду новое время публикации (ЧЧ:ММ, любое). */
+export function renderAddTimePrompt(): Screen {
   return {
     text:
-      `⏰ Время ${name} поста\n\nТекущее: ${current}\n` +
-      "Пришли новое время в формате ЧЧ:ММ (например, 10:00).",
+      "➕ Новое время публикации\n\nПришли время в формате ЧЧ:ММ " +
+      "(например, 13:47). Можно любое время суток и сколько угодно времён.",
+    keyboard: buildKeyboard([navRow(encodeCb("auto"))]),
+  };
+}
+
+/** Экран-приглашение: жду адрес канала публикации. */
+export function renderSetChannelPrompt(): Screen {
+  return {
+    text:
+      "📡 Канал публикации\n\nПришли @username канала (например, @supertestmaster), " +
+      "ссылку t.me/… или числовой id канала.\n\n" +
+      "⚠️ Бот должен быть админом этого канала с правом публикации.",
     keyboard: buildKeyboard([navRow(encodeCb("auto"))]),
   };
 }

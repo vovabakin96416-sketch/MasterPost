@@ -2,7 +2,7 @@ import { type Api, GrammyError } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../db/client.js";
 import {
-  getPostForToday,
+  getPostsForDay,
   type PostToPublish,
 } from "../db/repositories/postRepository.js";
 import {
@@ -11,15 +11,18 @@ import {
 } from "../db/repositories/channelRepository.js";
 import { localDateParts } from "../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../core/schedule/resolveCampaignDay.js";
-import { dueSlots, type SlotName } from "../core/schedule/dueSlots.js";
-import { markSlotPosted, readAutopostConfig } from "./autopostSettings.js";
+import { dueTimes } from "../core/schedule/times.js";
+import { readAutopostConfig, saveProgress } from "./autopostSettings.js";
 
 /**
- * Сервис публикации постов (Шаг 4 — порт `send_post` / `scheduled_*_post`).
+ * Сервис публикации постов (Шаг 4 / Доработка 4.1 — порт `send_post`).
  *
  * Изолирован от Telegram-слоя: принимает `bot.api` как зависимость, поэтому
  * вызывается и из планировщика (по расписанию), и из меню («Опубликовать сейчас»).
  * На Шаге 4 шлём только текст; фото (Шаги 5–6) и кнопки (Шаг 6) добавятся здесь же.
+ *
+ * Расписание — произвольный список времён: посты дня (по их `time`) публикуются по
+ * порядку в заданные времена. Индекс поста = число уже опубликованных сегодня.
  */
 
 /** Зависимости публикации: БД, логгер, Telegram API и id админа для уведомлений. */
@@ -79,11 +82,11 @@ function resolveNow(channel: PostingChannel): {
 }
 
 /**
- * Тик планировщика: публикует слоты, которым «пора», в цель канала.
- * Дедуп по локальной дате: после попытки (публикация/предупреждение/пропуск)
- * слот помечается обработанным за сегодня, чтобы не сработать повторно.
+ * Тик планировщика: публикует посты дня в наступившие времена. Дедуп по локальной
+ * дате (прогресс `{date, postedTimes}`): время отрабатывается раз в день, после
+ * простоя — догоняет. Индекс поста = число уже опубликованных сегодня.
  */
-export async function publishDueSlots(deps: PostingDeps): Promise<void> {
+export async function publishDuePosts(deps: PostingDeps): Promise<void> {
   const { prisma, logger, api } = deps;
   const channel = await getPostingChannel(prisma);
   if (channel === null) {
@@ -95,48 +98,55 @@ export async function publishDueSlots(deps: PostingDeps): Promise<void> {
   }
 
   const { today, week } = resolveNow(channel);
-  const due = dueSlots(today, config.times, config.last);
+  const due = dueTimes(today, config.times, config.progress);
   if (due.length === 0) {
     return;
   }
 
-  // Автопостинг включён, но цель не задана — один раз предупреждаем и помечаем,
-  // чтобы не спамить каждую минуту.
+  // Уже отработанные сегодня времена (для продолжения нумерации постов в течение дня).
+  const posted =
+    config.progress.date === today.isoDate ? [...config.progress.postedTimes] : [];
+
+  // Автопостинг включён, но цель не задана — один раз предупреждаем и помечаем.
   if (channel.chatId === null) {
-    for (const slot of due) {
-      await markSlotPosted(prisma, channel.id, slot, today.isoDate);
-    }
+    await saveProgress(prisma, channel.id, {
+      date: today.isoDate,
+      postedTimes: [...posted, ...due],
+    });
     await notifyAdmin(
       deps,
-      "⚠️ Автопостинг включён, но канал публикации не задан (chatId). Укажите его и включите снова.",
+      "⚠️ Автопостинг включён, но канал публикации не задан. Откройте «📅 Автопостинг → 📡 Указать канал».",
     );
     return;
   }
 
-  for (const slot of due) {
+  const posts = await getPostsForDay(prisma, channel.id, week, today.weekday);
+  for (const time of due) {
+    const idx = posted.length;
+    const post = posts[idx];
     try {
-      const post = await getPostForToday(prisma, channel.id, week, today.weekday, slot);
-      if (post !== null) {
+      if (post !== undefined) {
         await safeSend(api, channel.chatId, buildPostMessage(post));
         logger.info(
-          { channelId: channel.id, week, day: today.weekday, slot },
+          { channelId: channel.id, week, day: today.weekday, time, idx },
           "пост опубликован (авто)",
         );
-      } else if (slot === "morning") {
+      } else if (idx === 0) {
         await notifyAdmin(
           deps,
-          `⚠️ Нет поста на сегодня (утро). Неделя ${String(week)}, день ${today.weekday}. Проверьте контент-план.`,
+          `⚠️ Нет постов на сегодня. Неделя ${String(week)}, день ${today.weekday}. Проверьте контент-план.`,
         );
-        logger.warn({ week, day: today.weekday, slot }, "нет поста на сегодня");
+        logger.warn({ week, day: today.weekday, time }, "нет постов на сегодня");
       } else {
-        logger.info({ week, day: today.weekday, slot }, "вечернего поста нет — пропуск");
+        logger.info({ week, time, idx }, "постов на сегодня меньше, чем времён — пропуск");
       }
     } catch (err) {
-      logger.error({ err, slot }, "ошибка публикации слота");
+      logger.error({ err, time }, "ошибка публикации");
     } finally {
-      await markSlotPosted(prisma, channel.id, slot, today.isoDate);
+      posted.push(time);
     }
   }
+  await saveProgress(prisma, channel.id, { date: today.isoDate, postedTimes: posted });
 }
 
 /** Результат ручной публикации (для тоста/экрана меню). */
@@ -145,13 +155,10 @@ export type PublishNowResult =
   | { ok: false; reason: "no_channel" | "no_target" | "no_post" };
 
 /**
- * Ручная публикация слота из меню («Опубликовать сейчас»). В отличие от тика —
- * игнорирует тумблер и дедуп (явное действие админа) и НЕ помечает слот постнутым.
+ * Ручная публикация из меню («Опубликовать сейчас (тест)»). Шлёт ПЕРВЫЙ пост дня —
+ * быстрый тест. Игнорирует тумблер и дедуп (явное действие админа), прогресс не трогает.
  */
-export async function publishNow(
-  deps: PostingDeps,
-  slot: SlotName,
-): Promise<PublishNowResult> {
+export async function publishNow(deps: PostingDeps): Promise<PublishNowResult> {
   const { prisma, api, logger } = deps;
   const channel = await getPostingChannel(prisma);
   if (channel === null) {
@@ -161,11 +168,12 @@ export async function publishNow(
     return { ok: false, reason: "no_target" };
   }
   const { today, week } = resolveNow(channel);
-  const post = await getPostForToday(prisma, channel.id, week, today.weekday, slot);
-  if (post === null) {
+  const posts = await getPostsForDay(prisma, channel.id, week, today.weekday);
+  const first = posts[0];
+  if (first === undefined) {
     return { ok: false, reason: "no_post" };
   }
-  await safeSend(api, channel.chatId, buildPostMessage(post));
-  logger.info({ channelId: channel.id, week, slot }, "пост опубликован (вручную)");
+  await safeSend(api, channel.chatId, buildPostMessage(first));
+  logger.info({ channelId: channel.id, week }, "пост опубликован (вручную)");
   return { ok: true, week };
 }

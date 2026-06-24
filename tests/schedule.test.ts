@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { localDateParts } from "../src/core/schedule/localDate.js";
 import { resolveCampaignDay } from "../src/core/schedule/resolveCampaignDay.js";
-import { dueSlots, parseTime } from "../src/core/schedule/dueSlots.js";
-import { validateTime } from "../src/core/menu/validation.js";
+import { dueTimes, parseTime, sortTimes } from "../src/core/schedule/times.js";
+import {
+  validateChannelTarget,
+  validateTime,
+} from "../src/core/menu/validation.js";
 
 /** Хелпер: локальные части UTC-инстанта в UTC (детерминированно для тестов). */
 function at(iso: string): ReturnType<typeof localDateParts> {
@@ -62,49 +65,84 @@ describe("resolveCampaignDay", () => {
   });
 });
 
-describe("dueSlots", () => {
-  const schedule = { morning: "10:00", evening: "20:00" };
-  const none = { morning: null, evening: null };
+describe("sortTimes", () => {
+  it("сортирует по возрастанию, убирает дубли и мусор", () => {
+    expect(sortTimes(["20:00", "09:00", "20:00", "abc", "13:30"])).toEqual([
+      "09:00",
+      "13:30",
+      "20:00",
+    ]);
+  });
+});
 
-  it("до времени слота — пусто", () => {
-    expect(dueSlots(at("2024-01-01T09:00:00Z"), schedule, none)).toEqual([]);
+describe("dueTimes", () => {
+  const times = ["10:00", "14:00", "20:00"];
+  const fresh = { date: null, postedTimes: [] };
+
+  it("до первого времени — пусто", () => {
+    expect(dueTimes(at("2024-01-01T09:00:00Z"), times, fresh)).toEqual([]);
   });
 
-  it("после времени слота — слот «пора»", () => {
-    expect(dueSlots(at("2024-01-01T10:30:00Z"), schedule, none)).toEqual([
-      "morning",
+  it("наступившие времена «пора» (отсортированы)", () => {
+    expect(dueTimes(at("2024-01-01T14:30:00Z"), times, fresh)).toEqual([
+      "10:00",
+      "14:00",
     ]);
   });
 
-  it("оба слота после своего времени", () => {
-    expect(dueSlots(at("2024-01-01T20:01:00Z"), schedule, none)).toEqual([
-      "morning",
-      "evening",
+  it("уже отработанные сегодня времена исключаются (дедуп)", () => {
+    const progress = { date: "2024-01-01", postedTimes: ["10:00"] };
+    expect(dueTimes(at("2024-01-01T14:30:00Z"), times, progress)).toEqual([
+      "14:00",
     ]);
   });
 
-  it("уже публиковали сегодня — слот не повторяется (дедуп)", () => {
-    const last = { morning: "2024-01-01", evening: null };
-    expect(dueSlots(at("2024-01-01T10:30:00Z"), schedule, last)).toEqual([]);
-  });
-
-  it("публиковали вчера — слот снова «пора» сегодня", () => {
-    const last = { morning: "2023-12-31", evening: null };
-    expect(dueSlots(at("2024-01-01T10:30:00Z"), schedule, last)).toEqual([
-      "morning",
+  it("прогресс за другой день сбрасывается", () => {
+    const progress = { date: "2023-12-31", postedTimes: ["10:00", "14:00"] };
+    expect(dueTimes(at("2024-01-01T14:30:00Z"), times, progress)).toEqual([
+      "10:00",
+      "14:00",
     ]);
   });
 
-  it("догон после простоя: время давно прошло, сегодня не постили", () => {
-    expect(dueSlots(at("2024-01-01T23:00:00Z"), schedule, none)).toEqual([
-      "morning",
-      "evening",
+  it("догон после простоя: все наступившие времена «пора»", () => {
+    expect(dueTimes(at("2024-01-01T23:00:00Z"), times, fresh)).toEqual([
+      "10:00",
+      "14:00",
+      "20:00",
     ]);
   });
 
-  it("невалидное время слота тихо пропускается", () => {
-    const bad = { morning: "25:00", evening: "20:00" };
-    expect(dueSlots(at("2024-01-01T23:00:00Z"), bad, none)).toEqual(["evening"]);
+  it("пустой список времён → пусто", () => {
+    expect(dueTimes(at("2024-01-01T23:00:00Z"), [], fresh)).toEqual([]);
+  });
+});
+
+describe("validateChannelTarget", () => {
+  it("принимает @username", () => {
+    const r = validateChannelTarget("@supertestmaster");
+    expect(r).toEqual({ ok: true, value: "@supertestmaster" });
+  });
+
+  it("принимает голый username и добавляет @", () => {
+    const r = validateChannelTarget("supertestmaster");
+    expect(r).toEqual({ ok: true, value: "@supertestmaster" });
+  });
+
+  it("извлекает username из ссылки t.me", () => {
+    const r = validateChannelTarget("https://t.me/supertestmaster");
+    expect(r).toEqual({ ok: true, value: "@supertestmaster" });
+  });
+
+  it("принимает числовой id канала", () => {
+    const r = validateChannelTarget("-1001234567890");
+    expect(r).toEqual({ ok: true, value: "-1001234567890" });
+  });
+
+  it("отвергает мусор", () => {
+    expect(validateChannelTarget("").ok).toBe(false);
+    expect(validateChannelTarget("@a").ok).toBe(false);
+    expect(validateChannelTarget("привет!").ok).toBe(false);
   });
 });
 

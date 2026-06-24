@@ -1,3 +1,4 @@
+import { Prisma } from "../../generated/prisma/client.js";
 import type { PrismaClient } from "../client.js";
 
 /**
@@ -42,31 +43,27 @@ export async function setBooleanSetting(
 }
 
 /**
- * Читает строковую настройку (времена слотов, даты последней публикации — Шаг 4).
- * Если записи нет или значение не строка — возвращает `defaultValue`.
+ * Читает «сырое» JSON-значение настройки (массивы/объекты — времена, прогресс).
+ * `undefined`, если записи нет (вызывающий применяет дефолт). Доработка 4.1.
  */
-export async function getStringSetting(
+export async function getJsonSetting(
   prisma: PrismaClient,
   channelId: string,
   key: string,
-  defaultValue: string | null,
-): Promise<string | null> {
+): Promise<Prisma.JsonValue | undefined> {
   const row = await prisma.setting.findUnique({
     where: { channelId_key: { channelId, key } },
     select: { value: true },
   });
-  if (!row) {
-    return defaultValue;
-  }
-  return typeof row.value === "string" ? row.value : defaultValue;
+  return row?.value;
 }
 
-/** Записывает строковую настройку (upsert по паре channelId+key). Шаг 4. */
-export async function setStringSetting(
+/** Записывает JSON-значение настройки (upsert по паре channelId+key). Доработка 4.1. */
+export async function setJsonSetting(
   prisma: PrismaClient,
   channelId: string,
   key: string,
-  value: string,
+  value: Prisma.InputJsonValue,
 ): Promise<void> {
   await prisma.setting.upsert({
     where: { channelId_key: { channelId, key } },

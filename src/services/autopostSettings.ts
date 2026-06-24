@@ -1,92 +1,109 @@
+import { z } from "zod";
 import type { PrismaClient } from "../db/client.js";
 import {
   getBooleanSetting,
-  getStringSetting,
-  setStringSetting,
+  getJsonSetting,
+  setJsonSetting,
   toggleBooleanSetting,
 } from "../db/repositories/settingRepository.js";
-import type {
-  LastPosted,
-  ScheduleTimes,
-  SlotName,
-} from "../core/schedule/dueSlots.js";
+import { sortTimes, type Progress } from "../core/schedule/times.js";
 
 /**
- * Настройки автопостинга (Шаг 4) поверх таблицы `Setting`. Здесь живут ключи и
- * дефолты, чтобы и планировщик (читает), и меню админа (читает/пишет) пользовались
+ * Настройки автопостинга (Доработка 4.1) поверх таблицы `Setting`. Здесь живут ключи
+ * и дефолты, чтобы планировщик (читает) и меню админа (читает/пишет) пользовались
  * одним источником. Тематики нет — это общие настройки любого канала.
+ *
+ * Вместо двух слотов «утро/вечер» — произвольный СПИСОК времён публикации на день.
  */
 
 export const AUTOPOST_KEYS = {
   enabled: "autopost_enabled",
-  morningTime: "morning_time",
-  eveningTime: "evening_time",
-  lastMorning: "last_post_morning",
-  lastEvening: "last_post_evening",
+  times: "autopost_times", // JSON: ["09:00","13:30","20:00"]
+  progress: "autopost_progress", // JSON: { date, postedTimes }
 } as const;
 
-/** Дефолты времён слотов — как в Python-боте (10:00 / 20:00). */
-export const DEFAULT_TIMES: ScheduleTimes = { morning: "10:00", evening: "20:00" };
+/** Дефолтные времена, если список ни разу не задавали. */
+export const DEFAULT_TIMES: readonly string[] = ["10:00", "20:00"];
 
 /** По умолчанию автопостинг ВЫКЛ — ничего не уходит само, пока админ не включит. */
 export const DEFAULT_ENABLED = false;
 
+const timesSchema = z.array(z.string());
+const progressSchema = z.object({
+  date: z.string().nullable(),
+  postedTimes: z.array(z.string()),
+});
+
+const EMPTY_PROGRESS: Progress = { date: null, postedTimes: [] };
+
 export interface AutopostConfig {
   enabled: boolean;
-  times: ScheduleTimes;
-  last: LastPosted;
+  times: string[]; // отсортированы, без дублей
+  progress: Progress;
 }
 
-/** Читает полную конфигурацию автопостинга канала за один проход. */
+/** Читает список времён (отсортированный) или дефолт, если запись не задавалась. */
+async function readTimes(prisma: PrismaClient, channelId: string): Promise<string[]> {
+  const raw = await getJsonSetting(prisma, channelId, AUTOPOST_KEYS.times);
+  if (raw === undefined) {
+    return sortTimes(DEFAULT_TIMES);
+  }
+  const parsed = timesSchema.safeParse(raw);
+  return sortTimes(parsed.success ? parsed.data : []);
+}
+
+/** Читает полную конфигурацию автопостинга канала. */
 export async function readAutopostConfig(
   prisma: PrismaClient,
   channelId: string,
 ): Promise<AutopostConfig> {
-  const [enabled, morning, evening, lastMorning, lastEvening] = await Promise.all([
+  const [enabled, times, rawProgress] = await Promise.all([
     getBooleanSetting(prisma, channelId, AUTOPOST_KEYS.enabled, DEFAULT_ENABLED),
-    getStringSetting(prisma, channelId, AUTOPOST_KEYS.morningTime, DEFAULT_TIMES.morning),
-    getStringSetting(prisma, channelId, AUTOPOST_KEYS.eveningTime, DEFAULT_TIMES.evening),
-    getStringSetting(prisma, channelId, AUTOPOST_KEYS.lastMorning, null),
-    getStringSetting(prisma, channelId, AUTOPOST_KEYS.lastEvening, null),
+    readTimes(prisma, channelId),
+    getJsonSetting(prisma, channelId, AUTOPOST_KEYS.progress),
   ]);
-  return {
-    enabled,
-    times: {
-      morning: morning ?? DEFAULT_TIMES.morning,
-      evening: evening ?? DEFAULT_TIMES.evening,
-    },
-    last: { morning: lastMorning, evening: lastEvening },
-  };
+  const progress =
+    rawProgress === undefined
+      ? EMPTY_PROGRESS
+      : (progressSchema.safeParse(rawProgress).data ?? EMPTY_PROGRESS);
+  return { enabled, times, progress };
 }
 
-/** Ключ настройки времени по слоту. */
-function timeKey(slot: SlotName): string {
-  return slot === "morning" ? AUTOPOST_KEYS.morningTime : AUTOPOST_KEYS.eveningTime;
-}
-
-/** Ключ настройки «последняя публикация» по слоту. */
-function lastKey(slot: SlotName): string {
-  return slot === "morning" ? AUTOPOST_KEYS.lastMorning : AUTOPOST_KEYS.lastEvening;
-}
-
-/** Сохраняет время публикации слота (нормализованное "HH:MM"). */
-export async function setSlotTime(
+/** Добавляет время в список (дедуп + сортировка). */
+export async function addTime(
   prisma: PrismaClient,
   channelId: string,
-  slot: SlotName,
   value: string,
 ): Promise<void> {
-  await setStringSetting(prisma, channelId, timeKey(slot), value);
+  const current = await readTimes(prisma, channelId);
+  const next = sortTimes([...current, value]);
+  await setJsonSetting(prisma, channelId, AUTOPOST_KEYS.times, next);
 }
 
-/** Отмечает, что слот опубликован (или обработан) в указанную локальную дату. */
-export async function markSlotPosted(
+/** Удаляет время по индексу в отсортированном списке (как показано в меню). */
+export async function removeTimeAt(
   prisma: PrismaClient,
   channelId: string,
-  slot: SlotName,
-  isoDate: string,
+  index: number,
 ): Promise<void> {
-  await setStringSetting(prisma, channelId, lastKey(slot), isoDate);
+  const current = await readTimes(prisma, channelId);
+  if (index < 0 || index >= current.length) {
+    return;
+  }
+  current.splice(index, 1);
+  await setJsonSetting(prisma, channelId, AUTOPOST_KEYS.times, current);
+}
+
+/** Сохраняет прогресс публикаций за день (дата + отработанные времена). */
+export async function saveProgress(
+  prisma: PrismaClient,
+  channelId: string,
+  progress: Progress,
+): Promise<void> {
+  await setJsonSetting(prisma, channelId, AUTOPOST_KEYS.progress, {
+    date: progress.date,
+    postedTimes: [...progress.postedTimes],
+  });
 }
 
 /** Переключает автопостинг и возвращает новое значение. */

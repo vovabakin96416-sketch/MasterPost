@@ -7,7 +7,7 @@
  */
 
 import { normalizeTriggerText } from "../triggers/matchTrigger.js";
-import { parseTime } from "../schedule/dueSlots.js";
+import { parseTime } from "../schedule/times.js";
 
 /** Максимальная длина ответа-предсказания (запас под лимит сообщения Telegram). */
 export const MAX_ANSWER_LENGTH = 3500;
@@ -78,4 +78,36 @@ export function validateTime(input: string): ValidationResult {
   const mm = minutes % 60;
   const pad = (n: number): string => (n < 10 ? `0${String(n)}` : String(n));
   return { ok: true, value: `${pad(hh)}:${pad(mm)}` };
+}
+
+/**
+ * Проверяет адрес канала публикации (Доработка 4.1): принимает `@username`,
+ * ссылку `t.me/...`, голый `username` или числовой id канала (`-100…`).
+ * Возвращает нормализованную форму: `@username` либо строку-id.
+ */
+export function validateChannelTarget(input: string): ValidationResult {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, error: "Пусто — пришлите @username, ссылку t.me/… или id канала." };
+  }
+  // Числовой id канала (обычно -100…) — принимаем как есть.
+  if (/^-?\d{5,}$/.test(trimmed)) {
+    return { ok: true, value: trimmed };
+  }
+  // Ссылка t.me/<name> или https://t.me/<name> (+ возможный хвост).
+  const link = /(?:https?:\/\/)?t\.me\/([A-Za-z][A-Za-z0-9_]{3,31})/i.exec(trimmed);
+  if (link?.[1] !== undefined) {
+    return { ok: true, value: `@${link[1]}` };
+  }
+  // @username или голый username (буква, затем буквы/цифры/_, 4–32 символа).
+  const name = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  if (/^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(name)) {
+    return { ok: true, value: `@${name}` };
+  }
+  return {
+    ok: false,
+    error:
+      "Не похоже на канал. Пришлите @username (например, @supertestmaster), " +
+      "ссылку t.me/… или числовой id.",
+  };
 }

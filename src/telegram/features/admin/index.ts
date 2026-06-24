@@ -2,12 +2,13 @@ import { Composer, type Context, GrammyError } from "grammy";
 import { decodeCb, intArg } from "../../../core/menu/callbackData.js";
 import {
   validateAnswer,
+  validateChannelTarget,
   validateTime,
   validateTriggerWord,
 } from "../../../core/menu/validation.js";
 import {
-  readAutopostConfig,
-  setSlotTime,
+  addTime,
+  removeTimeAt,
   toggleAutopost,
 } from "../../../services/autopostSettings.js";
 import {
@@ -15,11 +16,11 @@ import {
   type PostingDeps,
   type PublishNowResult,
 } from "../../../services/postingService.js";
-import type { SlotName } from "../../../core/schedule/dueSlots.js";
 import {
   addTrigger,
   getActiveChannel,
   removeTrigger,
+  setChatId,
 } from "../../../db/repositories/channelRepository.js";
 import {
   addText,
@@ -33,9 +34,10 @@ import {
   renderAddTriggerPrompt,
   renderAnswer,
   renderEditAnswerPrompt,
+  renderAddTimePrompt,
   renderAutopost,
   renderMain,
-  renderSetTimePrompt,
+  renderSetChannelPrompt,
   renderSettings,
   renderStatus,
   renderTrigger,
@@ -172,36 +174,39 @@ async function routeCallback(
       return;
     }
 
-    case "amt":
-    case "aet": {
-      const slot: SlotName = action === "amt" ? "morning" : "evening";
+    case "achan":
+      pending.set(adminId, { kind: "setChannel" });
+      await editScreen(ctx, renderSetChannelPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "atadd":
+      pending.set(adminId, { kind: "addTime" });
+      await editScreen(ctx, renderAddTimePrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "atdel": {
+      const idx = intArg(args, 0);
       const channel = await getActiveChannel(deps.prisma);
-      if (channel === null) {
+      if (idx === null || channel === null) {
         await ctx.answerCallbackQuery();
         return;
       }
-      const config = await readAutopostConfig(deps.prisma, channel.id);
-      const current =
-        slot === "morning" ? config.times.morning : config.times.evening;
-      pending.set(adminId, { kind: "setTime", slot });
-      await editScreen(ctx, renderSetTimePrompt(slot, current));
-      await ctx.answerCallbackQuery();
+      await removeTimeAt(deps.prisma, channel.id, idx);
+      await editScreen(ctx, await renderAutopost(deps));
+      await ctx.answerCallbackQuery({ text: "Время удалено" });
       return;
     }
 
     case "apub": {
-      const slot = parseSlot(args[0]);
-      if (slot === null) {
-        await ctx.answerCallbackQuery();
-        return;
-      }
       const postingDeps: PostingDeps = {
         prisma: deps.prisma,
         logger: deps.logger,
         api: ctx.api,
         adminId: deps.adminId,
       };
-      const result = await publishNow(postingDeps, slot);
+      const result = await publishNow(postingDeps);
       await ctx.answerCallbackQuery({
         text: publishResultText(result),
         show_alert: !result.ok,
@@ -405,28 +410,34 @@ async function handleInput(
       return;
     }
 
-    case "setTime": {
+    case "addTime": {
       const result = validateTime(text);
       if (!result.ok) {
         await ctx.reply(`⚠️ ${result.error}`);
         return; // остаёмся в режиме ввода
       }
-      await setSlotTime(deps.prisma, channel.id, state.slot, result.value);
+      await addTime(deps.prisma, channel.id, result.value);
       pending.delete(deps.adminId);
-      const name = state.slot === "morning" ? "утра" : "вечера";
-      await ctx.reply(`✅ Время ${name}: ${result.value}`);
+      await ctx.reply(`✅ Время добавлено: ${result.value}`);
+      await sendScreen(ctx, await renderAutopost(deps));
+      return;
+    }
+
+    case "setChannel": {
+      const result = validateChannelTarget(text);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}`);
+        return; // остаёмся в режиме ввода
+      }
+      await setChatId(deps.prisma, channel.id, result.value);
+      pending.delete(deps.adminId);
+      await ctx.reply(
+        `✅ Канал публикации: ${result.value}\nУбедись, что бот — админ этого канала.`,
+      );
       await sendScreen(ctx, await renderAutopost(deps));
       return;
     }
   }
-}
-
-/** Разбирает аргумент слота из callback-data ("morning"/"evening") или null. */
-function parseSlot(raw: string | undefined): SlotName | null {
-  if (raw === "morning" || raw === "evening") {
-    return raw;
-  }
-  return null;
 }
 
 /** Текст тоста по результату ручной публикации. */
@@ -440,7 +451,7 @@ function publishResultText(result: PublishNowResult): string {
     case "no_target":
       return "Не задан канал публикации (chatId). Укажите его в настройках канала.";
     case "no_post":
-      return "На сегодня нет поста для этого слота.";
+      return "На сегодня нет постов в контент-плане.";
   }
 }
 

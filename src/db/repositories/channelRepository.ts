@@ -54,6 +54,18 @@ export async function getActiveChannel(
   });
 }
 
+/** Задаёт цель публикации автопостинга (@username или числовой id). Доработка 4.1. */
+export async function setChatId(
+  prisma: PrismaClient,
+  channelId: string,
+  chatId: string | null,
+): Promise<void> {
+  await prisma.channel.update({
+    where: { id: channelId },
+    data: { chatId },
+  });
+}
+
 /** Канал в форме, нужной автопостингу (Шаг 4): цель + пояс + старт кампании. */
 export interface PostingChannel {
   id: string;
