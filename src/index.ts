@@ -1,6 +1,7 @@
 import { ZodError } from "zod";
 import { parseEnv } from "./config/env.js";
 import { createLogger } from "./lib/logger.js";
+import { createPrismaClient } from "./db/client.js";
 import { createBot } from "./telegram/bot.js";
 import { startHealthServer } from "./server/health.js";
 
@@ -32,12 +33,14 @@ async function main(): Promise<void> {
   const logger = createLogger(env.LOG_LEVEL);
 
   const server = startHealthServer(env.PORT, logger);
-  const bot = createBot(env.BOT_TOKEN);
+  const prisma = createPrismaClient(env.DATABASE_URL);
+  const bot = createBot(env.BOT_TOKEN, { prisma, logger });
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutting down");
     void bot.stop();
     server.close();
+    void prisma.$disconnect();
   };
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));

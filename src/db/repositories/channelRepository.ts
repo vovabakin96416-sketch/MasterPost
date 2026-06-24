@@ -31,3 +31,24 @@ export async function upsertChannel(
   });
   return channel.id;
 }
+
+/** Канал в форме, нужной триггерам: id + слова-триггеры из конфига. */
+export interface ActiveChannel {
+  id: string;
+  triggerWords: string[];
+}
+
+/**
+ * Возвращает единственный активный канал (или `null`). На Шаге 2 бот ведёт один
+ * канал, поэтому резолвим первый активный. Привязка комментариев к каналу по
+ * chat-id — это мультиканальность (Шаг 8), сюда не тащим.
+ */
+export async function getActiveChannel(
+  prisma: PrismaClient,
+): Promise<ActiveChannel | null> {
+  return prisma.channel.findFirst({
+    where: { isActive: true },
+    select: { id: true, triggerWords: true },
+    orderBy: { createdAt: "asc" },
+  });
+}

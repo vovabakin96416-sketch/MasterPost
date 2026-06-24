@@ -15,3 +15,19 @@ export async function upsertTextPool(
     update: { texts },
   });
 }
+
+/**
+ * Возвращает тексты пула по паре (channelId, key) или `null`, если пула нет.
+ * Используется триггерами (Шаг 2): ключ пула = совпавшее слово-триггер.
+ */
+export async function getTextPool(
+  prisma: PrismaClient,
+  channelId: string,
+  key: string,
+): Promise<string[] | null> {
+  const pool = await prisma.textPool.findUnique({
+    where: { channelId_key: { channelId, key } },
+    select: { texts: true },
+  });
+  return pool ? pool.texts : null;
+}

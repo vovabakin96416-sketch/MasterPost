@@ -67,9 +67,9 @@ describe("content.json (посты канала №1)", () => {
 
 describe("texts.json (пулы предсказаний канала №1)", () => {
   const expectedKeys = [
-    "karta",
-    "kofe",
-    "runa",
+    "карта",
+    "кофе",
+    "руна",
     "button_love",
     "button_money",
     "button_cards",
