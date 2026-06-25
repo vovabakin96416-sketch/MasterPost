@@ -10,10 +10,20 @@
 export const AP_PREFIX = "ap";
 const SEP = ":";
 
-/** Действия экрана одобрения. Фото-кнопки (другое/своё фото) — Шаг 6. */
-export type ApprovalAction = "pub" | "edit" | "skip" | "cancel";
+/**
+ * Действия экрана одобрения. Текстовые (Шаг 5): pub/edit/skip/cancel.
+ * Фото (Шаг 6a): `reroll` — перевыбрать фото у провайдера, `own` — прислать своё.
+ */
+export type ApprovalAction = "pub" | "edit" | "skip" | "cancel" | "reroll" | "own";
 
-const ACTIONS: readonly ApprovalAction[] = ["pub", "edit", "skip", "cancel"];
+const ACTIONS: readonly ApprovalAction[] = [
+  "pub",
+  "edit",
+  "skip",
+  "cancel",
+  "reroll",
+  "own",
+];
 
 export interface ApprovalCb {
   readonly action: ApprovalAction;

@@ -35,7 +35,12 @@ async function main(): Promise<void> {
 
   const server = startHealthServer(env.PORT, logger);
   const prisma = createPrismaClient(env.DATABASE_URL);
-  const bot = createBot(env.BOT_TOKEN, { prisma, logger, adminId: env.ADMIN_ID });
+  const bot = createBot(env.BOT_TOKEN, {
+    prisma,
+    logger,
+    adminId: env.ADMIN_ID,
+    pexelsApiKey: env.PEXELS_API_KEY,
+  });
 
   // Шаг 4: планировщик автопостинга (тик раз в минуту через bot.api).
   const scheduler = startScheduler({
@@ -43,6 +48,7 @@ async function main(): Promise<void> {
     logger,
     api: bot.api,
     adminId: env.ADMIN_ID,
+    pexelsApiKey: env.PEXELS_API_KEY,
   });
 
   const shutdown = (signal: string): void => {

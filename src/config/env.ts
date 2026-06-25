@@ -20,6 +20,9 @@ export const envSchema = z.object({
     .number({ required_error: "ADMIN_ID обязателен (твой Telegram user id)" })
     .int("ADMIN_ID должен быть целым числом")
     .positive("ADMIN_ID должен быть положительным"),
+  // Ключ Pexels для подбора фото (Шаг 6a, бесплатная версия). Опционален: без него
+  // бот корректно публикует посты без фото (мягкая деградация, как в Python-боте).
+  PEXELS_API_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -137,7 +137,7 @@ model Cooldown {
 
 // Пост, ожидающий одобрения админом перед публикацией (Шаг 5).
 // Снимок текстовых полей: правки на одобрении меняют ЭТУ копию, не трогая
-// контент-план (как `post = dict(post)` в Python-боте). Фото — Шаг 6.
+// контент-план (как `post = dict(post)` в Python-боте).
 model PendingPost {
   id         String   @id @default(cuid())
   channelId  String
@@ -146,6 +146,7 @@ model PendingPost {
   title      String
   text       String
   cta        String
+  photoUrl   String? // кэш выбранного фото (URL Pexels или Telegram file_id) — Шаг 6a
   createdAt  DateTime @default(now())
 
   @@index([channelId, createdAt])

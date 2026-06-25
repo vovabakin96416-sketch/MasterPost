@@ -8,11 +8,12 @@ import type { PrismaClient } from "../../../db/client.js";
  * и доступом только администратору (`adminId`).
  */
 
-/** Зависимости меню: БД, логгер и id единственного админа. */
+/** Зависимости меню: БД, логгер, id единственного админа и ключ Pexels (фото). */
 export interface AdminDeps {
   prisma: PrismaClient;
   logger: Logger;
   adminId: number;
+  pexelsApiKey: string | undefined;
 }
 
 /**

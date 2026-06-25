@@ -4,9 +4,10 @@ import { createAdminComposer } from "./features/admin/index.js";
 import { createApprovalComposer } from "./features/approval/index.js";
 import type { CommentDeps } from "./features/comments/types.js";
 
-/** Зависимости бота: общий набор стадий-комментов + id админа для меню. */
+/** Зависимости бота: стадии-комментов + id админа для меню + ключ Pexels (фото). */
 export interface BotDeps extends CommentDeps {
   adminId: number;
+  pexelsApiKey: string | undefined;
 }
 
 /**

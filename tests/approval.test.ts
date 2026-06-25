@@ -7,7 +7,14 @@ import {
 } from "../src/core/approval/callback";
 import { buildApprovalCaption } from "../src/core/approval/caption";
 
-const ACTIONS: readonly ApprovalAction[] = ["pub", "edit", "skip", "cancel"];
+const ACTIONS: readonly ApprovalAction[] = [
+  "pub",
+  "edit",
+  "skip",
+  "cancel",
+  "reroll",
+  "own",
+];
 
 describe("approval callback: encode/decode round-trip", () => {
   it("кодирует и декодирует действие с id", () => {

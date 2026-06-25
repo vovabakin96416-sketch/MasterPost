@@ -15,6 +15,7 @@ export interface PendingPostRow {
   readonly title: string;
   readonly text: string;
   readonly cta: string;
+  readonly photoUrl: string | null; // кэш выбранного фото (URL/file_id) — Шаг 6a
 }
 
 const SELECT = {
@@ -24,6 +25,7 @@ const SELECT = {
   title: true,
   text: true,
   cta: true,
+  photoUrl: true,
 } as const;
 
 /** Поля снимка поста при постановке в очередь. */
@@ -32,6 +34,7 @@ export interface PendingPostInput {
   readonly text: string;
   readonly cta: string;
   readonly externalId: number | null;
+  readonly photoUrl: string | null; // пред-загруженное фото для превью (Шаг 6a)
 }
 
 /** Кладёт пост в очередь одобрения, возвращает созданную строку (с её id). */
@@ -68,6 +71,23 @@ export async function updatePendingText(
     return null;
   }
   return prisma.pendingPost.update({ where: { id }, data: { text }, select: SELECT });
+}
+
+/**
+ * Меняет кэш фото поста в очереди (Шаг 6a: «🔄 Другое фото» / «🖼 Своё фото»).
+ * `photoUrl` — URL или Telegram file_id; `null` снимает фото. Возвращает
+ * обновлённую строку или `null`, если её уже удалили.
+ */
+export async function setPendingPhoto(
+  prisma: PrismaClient,
+  id: string,
+  photoUrl: string | null,
+): Promise<PendingPostRow | null> {
+  const existing = await getPending(prisma, id);
+  if (existing === null) {
+    return null;
+  }
+  return prisma.pendingPost.update({ where: { id }, data: { photoUrl }, select: SELECT });
 }
 
 /** Убирает пост из очереди (опубликован / пропущен / отменён). Идемпотентно. */

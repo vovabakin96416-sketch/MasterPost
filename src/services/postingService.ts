@@ -1,4 +1,4 @@
-import { type Api, GrammyError } from "grammy";
+import { type Api, GrammyError, InlineKeyboard, InputFile } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../db/client.js";
 import {
@@ -24,45 +24,104 @@ import {
   deletePending,
   getPending,
 } from "../db/repositories/pendingPostRepository.js";
+import { resolvePhoto, refToCacheString } from "./mediaService.js";
+import type { PhotoRef } from "../core/media/types.js";
 
 /**
- * Сервис публикации постов (Шаг 4 / Доработка 4.1 — порт `send_post`).
+ * Сервис публикации постов (Шаг 4 / Доработка 4.1 / Шаг 6a — порт `send_post`).
  *
  * Изолирован от Telegram-слоя: принимает `bot.api` как зависимость, поэтому
  * вызывается и из планировщика (по расписанию), и из меню («Опубликовать сейчас»).
- * На Шаге 4 шлём только текст; фото (Шаги 5–6) и кнопки (Шаг 6) добавятся здесь же.
+ * Шаг 6a: посты уходят с фото (если подобрано); кнопки на постах — Шаг 6b.
  *
  * Расписание — произвольный список времён: посты дня (по их `time`) публикуются по
  * порядку в заданные времена. Индекс поста = число уже опубликованных сегодня.
  */
 
-/** Зависимости публикации: БД, логгер, Telegram API и id админа для уведомлений. */
+/** Зависимости публикации: БД, логгер, Telegram API, id админа и ключ Pexels (фото). */
 export interface PostingDeps {
   prisma: PrismaClient;
   logger: Logger;
   api: Api;
   adminId: number;
+  pexelsApiKey: string | undefined;
 }
+
+/** Лимит подписи к фото в Telegram. */
+const CAPTION_LIMIT = 1024;
 
 /** Собирает текст поста: `*title*` + текст + CTA (порт `send_post`). */
 export function buildPostMessage(post: PostSnapshot): string {
   return `*${post.title}*\n\n${post.text}\n\n${post.cta}`.trim();
 }
 
+/** Источники фото поста (для `resolvePhoto`) из строки контент-плана. */
+function photoSourcesOf(post: PostToPublish): {
+  pexelsQuery: string | null;
+  photoPath: string | null;
+} {
+  return { pexelsQuery: post.pexelsQuery, photoPath: post.photoPath };
+}
+
+/** Обрезает подпись под лимит Telegram (порт `[:1020]` Python-бота). */
+function truncateCaption(text: string): string {
+  return text.length <= CAPTION_LIMIT ? text : `${text.slice(0, CAPTION_LIMIT - 1)}…`;
+}
+
+/** Преобразует ссылку на фото к входу grammY (`url`/`file_id` — строка, путь — `InputFile`). */
+function toInputPhoto(ref: PhotoRef): string | InputFile {
+  switch (ref.kind) {
+    case "url":
+      return ref.url;
+    case "fileId":
+      return ref.fileId;
+    case "path":
+      return new InputFile(ref.path);
+  }
+}
+
+/** Опции `reply_markup` без передачи `undefined` (exactOptionalPropertyTypes). */
+function markup(keyboard: InlineKeyboard | undefined): { reply_markup?: InlineKeyboard } {
+  return keyboard === undefined ? {} : { reply_markup: keyboard };
+}
+
 /**
- * Отправка с Markdown и откатом на простой текст, если разметка ломается
- * (порт `safe_send`): кривой `_`/`*` в тексте не должен срывать публикацию.
+ * Отправляет пост: с фото (`sendPhoto` + подпись) или текстом (`sendMessage`).
+ * Расширение порта `safe_send`: при кривом Markdown — повтор без `parse_mode`; если
+ * фото не уходит (битый URL и т.п.) — публикуем текстом, чтобы пост не пропал.
  */
-export async function safeSend(
-  api: Api,
+export async function sendPost(
+  deps: PostingDeps,
   chatId: string | number,
   text: string,
+  photo: PhotoRef | null,
+  keyboard?: InlineKeyboard,
 ): Promise<void> {
+  const { api, logger } = deps;
+  if (photo !== null) {
+    const input = toInputPhoto(photo);
+    const caption = truncateCaption(text);
+    try {
+      await api.sendPhoto(chatId, input, {
+        caption,
+        parse_mode: "Markdown",
+        ...markup(keyboard),
+      });
+      return;
+    } catch (err) {
+      if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
+        await api.sendPhoto(chatId, input, { caption, ...markup(keyboard) });
+        return;
+      }
+      logger.warn({ err }, "не смог отправить фото — публикую текстом");
+      // не наша ошибка разметки → откатываемся на текстовую ветку ниже
+    }
+  }
   try {
-    await api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    await api.sendMessage(chatId, text, { parse_mode: "Markdown", ...markup(keyboard) });
   } catch (err) {
     if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
-      await api.sendMessage(chatId, text);
+      await api.sendMessage(chatId, text, { ...markup(keyboard) });
       return;
     }
     throw err;
@@ -98,7 +157,7 @@ function resolveNow(channel: PostingChannel): {
  * простоя — догоняет. Индекс поста = число уже опубликованных сегодня.
  */
 export async function publishDuePosts(deps: PostingDeps): Promise<void> {
-  const { prisma, logger, api } = deps;
+  const { prisma, logger } = deps;
   const channel = await getPostingChannel(prisma);
   if (channel === null) {
     return;
@@ -147,7 +206,8 @@ export async function publishDuePosts(deps: PostingDeps): Promise<void> {
           "пост отправлен на одобрение",
         );
       } else if (post !== undefined && channel.chatId !== null) {
-        await safeSend(api, channel.chatId, buildPostMessage(post));
+        const photo = await resolvePhoto(deps, channel.id, photoSourcesOf(post));
+        await sendPost(deps, channel.chatId, buildPostMessage(post), photo);
         logger.info(
           { channelId: channel.id, week, day: today.weekday, time, idx },
           "пост опубликован (авто)",
@@ -180,7 +240,7 @@ export type PublishNowResult =
  * быстрый тест. Игнорирует тумблер и дедуп (явное действие админа), прогресс не трогает.
  */
 export async function publishNow(deps: PostingDeps): Promise<PublishNowResult> {
-  const { prisma, api, logger } = deps;
+  const { prisma, logger } = deps;
   const channel = await getPostingChannel(prisma);
   if (channel === null) {
     return { ok: false, reason: "no_channel" };
@@ -194,37 +254,40 @@ export async function publishNow(deps: PostingDeps): Promise<PublishNowResult> {
   if (first === undefined) {
     return { ok: false, reason: "no_post" };
   }
-  await safeSend(api, channel.chatId, buildPostMessage(first));
+  const photo = await resolvePhoto(deps, channel.id, photoSourcesOf(first));
+  await sendPost(deps, channel.chatId, buildPostMessage(first), photo);
   logger.info({ channelId: channel.id, week }, "пост опубликован (вручную)");
   return { ok: true, week };
 }
 
-// ─── Одобрение постов (Шаг 5) ────────────────────────────────────────────────
+// ─── Одобрение постов (Шаг 5) + фото-превью (Шаг 6a) ──────────────────────────
 
-/** Шлёт админу сообщение с клавиатурой и откатом на простой текст при кривой разметке. */
-async function sendPreviewMessage(
+/** Ссылка на фото по кэш-строке очереди (`PendingPost.photoUrl`): URL или file_id. */
+export function photoRefFromCache(photoUrl: string | null): PhotoRef | null {
+  return photoUrl === null ? null : { kind: "url", url: photoUrl };
+}
+
+/**
+ * Шлёт админу превью одобрения (с фото, если подобрано) с кнопками. Устойчив к
+ * ошибкам доставки — превью не должно «ронять» тик планировщика/обработчик меню.
+ */
+export async function sendApprovalPreview(
   deps: PostingDeps,
   caption: string,
   pendingId: string,
+  photo: PhotoRef | null,
 ): Promise<void> {
-  const keyboard = approvalKeyboard(pendingId);
   try {
-    await deps.api.sendMessage(deps.adminId, caption, {
-      parse_mode: "Markdown",
-      reply_markup: keyboard,
-    });
+    await sendPost(deps, deps.adminId, caption, photo, approvalKeyboard(pendingId));
   } catch (err) {
-    if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
-      await deps.api.sendMessage(deps.adminId, caption, { reply_markup: keyboard });
-      return;
-    }
     deps.logger.error({ err }, "не смог отправить превью одобрения");
   }
 }
 
 /**
  * Ставит пост в очередь одобрения и шлёт админу превью с кнопками (порт
- * `request_approval`). Снимок текста кладём в БД, чтобы превью пережило рестарт.
+ * `request_approval`). Шаг 6a: пред-загружаем фото одним запросом к провайдеру и
+ * кэшируем в `PendingPost.photoUrl` — чтобы превью и публикация взяли одну картинку.
  */
 export async function requestApproval(
   deps: PostingDeps,
@@ -232,13 +295,15 @@ export async function requestApproval(
   target: string | null,
   post: PostToPublish,
 ): Promise<void> {
+  const photo = await resolvePhoto(deps, channelId, photoSourcesOf(post));
   const pending = await createPending(deps.prisma, channelId, {
     title: post.title,
     text: post.text,
     cta: post.cta,
     externalId: post.externalId,
+    photoUrl: refToCacheString(photo),
   });
-  await sendPreviewMessage(deps, buildApprovalCaption(post, target), pending.id);
+  await sendApprovalPreview(deps, buildApprovalCaption(post, target), pending.id, photo);
 }
 
 /** Результат публикации одобренного поста (для тоста композера). */
@@ -266,7 +331,12 @@ export async function publishPending(
   if (channel.chatId === null) {
     return { ok: false, reason: "no_target" };
   }
-  await safeSend(deps.api, channel.chatId, buildPostMessage(pending));
+  await sendPost(
+    deps,
+    channel.chatId,
+    buildPostMessage(pending),
+    photoRefFromCache(pending.photoUrl),
+  );
   await deletePending(deps.prisma, pendingId);
   deps.logger.info({ pendingId, channelId: channel.id }, "пост опубликован (одобрен)");
   return { ok: true };

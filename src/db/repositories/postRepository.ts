@@ -3,12 +3,14 @@ import type { PrismaClient } from "../client.js";
 import type { PostSeed } from "../../core/content/postSchema.js";
 import type { Weekday } from "../../core/schedule/localDate.js";
 
-/** Пост, готовый к публикации (текст; фото/кнопки — Шаг 6). */
+/** Пост, готовый к публикации (текст + источники фото; кнопки — Шаг 6b). */
 export interface PostToPublish {
   externalId: number; // исходный id контент-плана — для трассировки снимка одобрения
   title: string;
   text: string;
   cta: string;
+  pexelsQuery: string | null; // запрос для подбора фото (Шаг 6a)
+  photoPath: string | null; // локальный файл из контент-плана (Шаг 6a)
 }
 
 /**
@@ -16,7 +18,7 @@ export interface PostToPublish {
  *
  * Доработка 4.1: расписание больше не делит посты на «утро/вечер». Берём все посты
  * дня, упорядоченные по полю `time` (затем `externalId`), и публикуем их по порядку
- * в заданные админом времена. Только текстовые поля (Шаг 4).
+ * в заданные админом времена. Текст + источники фото (Шаг 6a); кнопки — Шаг 6b.
  */
 export async function getPostsForDay(
   prisma: PrismaClient,
@@ -26,8 +28,27 @@ export async function getPostsForDay(
 ): Promise<PostToPublish[]> {
   return prisma.post.findMany({
     where: { channelId, week, day },
-    select: { externalId: true, title: true, text: true, cta: true },
+    select: {
+      externalId: true,
+      title: true,
+      text: true,
+      cta: true,
+      pexelsQuery: true,
+      photoPath: true,
+    },
     orderBy: [{ time: "asc" }, { externalId: "asc" }],
+  });
+}
+
+/** Источники фото поста контент-плана (для «🔄 Другое фото» на одобрении, Шаг 6a). */
+export async function getPostPhotoSources(
+  prisma: PrismaClient,
+  channelId: string,
+  externalId: number,
+): Promise<{ pexelsQuery: string | null; photoPath: string | null } | null> {
+  return prisma.post.findUnique({
+    where: { channelId_externalId: { channelId, externalId } },
+    select: { pexelsQuery: true, photoPath: true },
   });
 }
 

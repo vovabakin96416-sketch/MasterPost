@@ -211,6 +211,7 @@ async function routeCallback(
         logger: deps.logger,
         api: ctx.api,
         adminId: deps.adminId,
+        pexelsApiKey: deps.pexelsApiKey,
       };
       const result = await publishNow(postingDeps);
       await ctx.answerCallbackQuery({
@@ -245,6 +246,7 @@ async function routeCallback(
         logger: deps.logger,
         api: ctx.api,
         adminId: deps.adminId,
+        pexelsApiKey: deps.pexelsApiKey,
       };
       const result = await requestApprovalForToday(postingDeps);
       await ctx.answerCallbackQuery({
