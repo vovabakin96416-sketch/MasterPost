@@ -3,8 +3,9 @@ import type { PrismaClient } from "../client.js";
 import type { PostSeed } from "../../core/content/postSchema.js";
 import type { Weekday } from "../../core/schedule/localDate.js";
 
-/** Пост, готовый к публикации (Шаг 4 — только текст; фото/кнопки — Шаги 5–6). */
+/** Пост, готовый к публикации (текст; фото/кнопки — Шаг 6). */
 export interface PostToPublish {
+  externalId: number; // исходный id контент-плана — для трассировки снимка одобрения
   title: string;
   text: string;
   cta: string;
@@ -25,7 +26,7 @@ export async function getPostsForDay(
 ): Promise<PostToPublish[]> {
   return prisma.post.findMany({
     where: { channelId, week, day },
-    select: { title: true, text: true, cta: true },
+    select: { externalId: true, title: true, text: true, cta: true },
     orderBy: [{ time: "asc" }, { externalId: "asc" }],
   });
 }

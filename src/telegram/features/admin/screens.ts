@@ -7,6 +7,8 @@ import {
   getPostingChannel,
 } from "../../../db/repositories/channelRepository.js";
 import { readAutopostConfig } from "../../../services/autopostSettings.js";
+import { isApprovalEnabled } from "../../../services/approvalService.js";
+import { countPending } from "../../../db/repositories/pendingPostRepository.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js";
 import {
@@ -76,7 +78,7 @@ export const MAIN_SECTIONS: readonly Section[] = [
   { label: "⚙️ Настройки", data: encodeCb("set") },
   { label: "📊 Статус", data: encodeCb("stat") },
   { label: "📅 Автопостинг", data: encodeCb("auto") },
-  { label: "⏳ Одобрение постов (скоро)", data: encodeCb("soon") },
+  { label: "📋 Одобрение постов", data: encodeCb("appr") },
   { label: "⏳ AI-ответы (скоро)", data: encodeCb("soon") },
 ];
 
@@ -381,6 +383,42 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
   rows.push([{ label: "➕ Добавить время", data: encodeCb("atadd") }]);
   rows.push([{ label: "📤 Опубликовать сейчас (тест)", data: encodeCb("apub") }]);
   rows.push(navRow());
+
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/** Экран — одобрение постов (Шаг 5): тумблер + сколько ждут + тест-превью. */
+export async function renderApproval(deps: AdminDeps): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const [enabled, waiting] = await Promise.all([
+    isApprovalEnabled(deps.prisma, channel.id),
+    countPending(deps.prisma, channel.id),
+  ]);
+
+  const lines = [
+    "📋 Одобрение постов",
+    "",
+    `Статус: ${enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+    enabled
+      ? "Перед публикацией бот присылает тебе превью с кнопками — пост уходит в канал только после «✅ Опубликовать»."
+      : "Посты публикуются автоматически, без предварительного показа.",
+    "",
+    `Ждут одобрения: ${String(waiting)}`,
+  ];
+
+  const rows: Btn[][] = [
+    [
+      {
+        label: enabled ? "🔇 Выключить одобрение" : "✅ Включить одобрение",
+        data: encodeCb("aptgl"),
+      },
+    ],
+    [{ label: "👀 Прислать превью (тест)", data: encodeCb("appv") }],
+    navRow(),
+  ];
 
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }

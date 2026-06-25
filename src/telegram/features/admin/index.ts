@@ -13,9 +13,12 @@ import {
 } from "../../../services/autopostSettings.js";
 import {
   publishNow,
+  requestApprovalForToday,
   type PostingDeps,
+  type PreviewNowResult,
   type PublishNowResult,
 } from "../../../services/postingService.js";
+import { toggleApproval } from "../../../services/approvalService.js";
 import {
   addTrigger,
   getActiveChannel,
@@ -35,6 +38,7 @@ import {
   renderAnswer,
   renderEditAnswerPrompt,
   renderAddTimePrompt,
+  renderApproval,
   renderAutopost,
   renderMain,
   renderSetChannelPrompt,
@@ -73,10 +77,10 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
   // Всё остальное меню — только админ.
   const admin = composer.filter((ctx) => ctx.from?.id === adminId);
 
-  admin.on("callback_query:data", async (ctx) => {
+  admin.on("callback_query:data", async (ctx, next) => {
     const parsed = decodeCb(ctx.callbackQuery.data);
     if (parsed === null) {
-      await ctx.answerCallbackQuery();
+      await next(); // не кнопка меню (напр. `ap:*` одобрения) — отдаём дальше
       return;
     }
     // Любое нажатие кнопки отменяет режим ожидания ввода.
@@ -84,15 +88,17 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
     await routeCallback(ctx, deps, pending, parsed.action, parsed.args);
   });
 
-  // Текстовый ввод в личке — только когда ждём его (иначе игнорируем).
-  admin.chatType("private").on("message:text", async (ctx) => {
+  // Текстовый ввод в личке — только когда ждём его (иначе отдаём дальше).
+  admin.chatType("private").on("message:text", async (ctx, next) => {
     const state = pending.get(adminId);
     if (state === undefined) {
+      await next(); // ввод не ждём — пусть его обработает одобрение/комменты
       return;
     }
     const text = ctx.message.text;
     // Команды не считаем вводом (их ловят command-хендлеры).
     if (text.startsWith("/")) {
+      await next();
       return;
     }
     await handleInput(ctx, deps, pending, state, text);
@@ -209,6 +215,40 @@ async function routeCallback(
       const result = await publishNow(postingDeps);
       await ctx.answerCallbackQuery({
         text: publishResultText(result),
+        show_alert: !result.ok,
+      });
+      return;
+    }
+
+    case "appr":
+      await editScreen(ctx, await renderApproval(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "aptgl": {
+      const channel = await getActiveChannel(deps.prisma);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleApproval(deps.prisma, channel.id);
+      await editScreen(ctx, await renderApproval(deps));
+      await ctx.answerCallbackQuery({
+        text: next ? "Одобрение включено" : "Одобрение выключено",
+      });
+      return;
+    }
+
+    case "appv": {
+      const postingDeps: PostingDeps = {
+        prisma: deps.prisma,
+        logger: deps.logger,
+        api: ctx.api,
+        adminId: deps.adminId,
+      };
+      const result = await requestApprovalForToday(postingDeps);
+      await ctx.answerCallbackQuery({
+        text: previewResultText(result),
         show_alert: !result.ok,
       });
       return;
@@ -450,6 +490,19 @@ function publishResultText(result: PublishNowResult): string {
       return "Канал не найден. Запусти сид: npm run seed.";
     case "no_target":
       return "Не задан канал публикации (chatId). Укажите его в настройках канала.";
+    case "no_post":
+      return "На сегодня нет постов в контент-плане.";
+  }
+}
+
+/** Текст тоста по результату отправки тестового превью на одобрение. */
+function previewResultText(result: PreviewNowResult): string {
+  if (result.ok) {
+    return "👀 Превью отправлено — проверь сообщение от бота ☝️";
+  }
+  switch (result.reason) {
+    case "no_channel":
+      return "Канал не найден. Запусти сид: npm run seed.";
     case "no_post":
       return "На сегодня нет постов в контент-плане.";
   }

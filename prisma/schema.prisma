@@ -58,11 +58,12 @@ model Channel {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  posts       Post[]
-  textPools   TextPool[]
-  settings    Setting[]
-  cooldowns   Cooldown[]
-  subscribers Subscriber[]
+  posts        Post[]
+  textPools    TextPool[]
+  settings     Setting[]
+  cooldowns    Cooldown[]
+  subscribers  Subscriber[]
+  pendingPosts PendingPost[]
 }
 
 // Пост контент-плана. Поля повторяют content.json.
@@ -132,6 +133,22 @@ model Cooldown {
 
   @@unique([channelId, userId, trigger])
   @@index([channelId, expiresAt])
+}
+
+// Пост, ожидающий одобрения админом перед публикацией (Шаг 5).
+// Снимок текстовых полей: правки на одобрении меняют ЭТУ копию, не трогая
+// контент-план (как `post = dict(post)` в Python-боте). Фото — Шаг 6.
+model PendingPost {
+  id         String   @id @default(cuid())
+  channelId  String
+  channel    Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  externalId Int? // исходный пост контент-плана (для трассировки); null — иной источник
+  title      String
+  text       String
+  cta        String
+  createdAt  DateTime @default(now())
+
+  @@index([channelId, createdAt])
 }
 
 // Подписчик канала (заготовка под аналитику).

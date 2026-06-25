@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import { createCommentsComposer } from "./features/comments/index.js";
 import { createAdminComposer } from "./features/admin/index.js";
+import { createApprovalComposer } from "./features/approval/index.js";
 import type { CommentDeps } from "./features/comments/types.js";
 
 /** Зависимости бота: общий набор стадий-комментов + id админа для меню. */
@@ -26,6 +27,10 @@ export function createBot(token: string, deps: BotDeps): Bot {
 
   // Шаг 3: меню админа (/menu) — управление триггерами/ответами/настройками.
   bot.use(createAdminComposer(deps));
+
+  // Шаг 5: одобрение постов — кнопки превью (`ap:*`) и правка текста.
+  // После меню: чужие callback'и/текст меню отдаёт дальше через next().
+  bot.use(createApprovalComposer(deps));
 
   // Шаг 2: триггеры в комментах (карта/кофе/руна из конфига канала) + кулдаун.
   bot.use(createCommentsComposer(deps));

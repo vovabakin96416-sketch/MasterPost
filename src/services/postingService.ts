@@ -13,6 +13,17 @@ import { localDateParts } from "../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../core/schedule/resolveCampaignDay.js";
 import { dueTimes } from "../core/schedule/times.js";
 import { readAutopostConfig, saveProgress } from "./autopostSettings.js";
+import {
+  approvalKeyboard,
+  buildApprovalCaption,
+  isApprovalEnabled,
+  type PostSnapshot,
+} from "./approvalService.js";
+import {
+  createPending,
+  deletePending,
+  getPending,
+} from "../db/repositories/pendingPostRepository.js";
 
 /**
  * Сервис публикации постов (Шаг 4 / Доработка 4.1 — порт `send_post`).
@@ -34,7 +45,7 @@ export interface PostingDeps {
 }
 
 /** Собирает текст поста: `*title*` + текст + CTA (порт `send_post`). */
-export function buildPostMessage(post: PostToPublish): string {
+export function buildPostMessage(post: PostSnapshot): string {
   return `*${post.title}*\n\n${post.text}\n\n${post.cta}`.trim();
 }
 
@@ -103,12 +114,16 @@ export async function publishDuePosts(deps: PostingDeps): Promise<void> {
     return;
   }
 
+  // С одобрением пост уходит не в канал, а админу на превью — цель проверяем
+  // позже, при «✅ Опубликовать». Без одобрения цель нужна сразу.
+  const approvalOn = await isApprovalEnabled(prisma, channel.id);
+
   // Уже отработанные сегодня времена (для продолжения нумерации постов в течение дня).
   const posted =
     config.progress.date === today.isoDate ? [...config.progress.postedTimes] : [];
 
-  // Автопостинг включён, но цель не задана — один раз предупреждаем и помечаем.
-  if (channel.chatId === null) {
+  // Прямая публикация включена, но цель не задана — один раз предупреждаем и помечаем.
+  if (!approvalOn && channel.chatId === null) {
     await saveProgress(prisma, channel.id, {
       date: today.isoDate,
       postedTimes: [...posted, ...due],
@@ -125,13 +140,19 @@ export async function publishDuePosts(deps: PostingDeps): Promise<void> {
     const idx = posted.length;
     const post = posts[idx];
     try {
-      if (post !== undefined) {
+      if (post !== undefined && approvalOn) {
+        await requestApproval(deps, channel.id, channel.chatId, post);
+        logger.info(
+          { channelId: channel.id, week, day: today.weekday, time, idx },
+          "пост отправлен на одобрение",
+        );
+      } else if (post !== undefined && channel.chatId !== null) {
         await safeSend(api, channel.chatId, buildPostMessage(post));
         logger.info(
           { channelId: channel.id, week, day: today.weekday, time, idx },
           "пост опубликован (авто)",
         );
-      } else if (idx === 0) {
+      } else if (post === undefined && idx === 0) {
         await notifyAdmin(
           deps,
           `⚠️ Нет постов на сегодня. Неделя ${String(week)}, день ${today.weekday}. Проверьте контент-план.`,
@@ -176,4 +197,103 @@ export async function publishNow(deps: PostingDeps): Promise<PublishNowResult> {
   await safeSend(api, channel.chatId, buildPostMessage(first));
   logger.info({ channelId: channel.id, week }, "пост опубликован (вручную)");
   return { ok: true, week };
+}
+
+// ─── Одобрение постов (Шаг 5) ────────────────────────────────────────────────
+
+/** Шлёт админу сообщение с клавиатурой и откатом на простой текст при кривой разметке. */
+async function sendPreviewMessage(
+  deps: PostingDeps,
+  caption: string,
+  pendingId: string,
+): Promise<void> {
+  const keyboard = approvalKeyboard(pendingId);
+  try {
+    await deps.api.sendMessage(deps.adminId, caption, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard,
+    });
+  } catch (err) {
+    if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
+      await deps.api.sendMessage(deps.adminId, caption, { reply_markup: keyboard });
+      return;
+    }
+    deps.logger.error({ err }, "не смог отправить превью одобрения");
+  }
+}
+
+/**
+ * Ставит пост в очередь одобрения и шлёт админу превью с кнопками (порт
+ * `request_approval`). Снимок текста кладём в БД, чтобы превью пережило рестарт.
+ */
+export async function requestApproval(
+  deps: PostingDeps,
+  channelId: string,
+  target: string | null,
+  post: PostToPublish,
+): Promise<void> {
+  const pending = await createPending(deps.prisma, channelId, {
+    title: post.title,
+    text: post.text,
+    cta: post.cta,
+    externalId: post.externalId,
+  });
+  await sendPreviewMessage(deps, buildApprovalCaption(post, target), pending.id);
+}
+
+/** Результат публикации одобренного поста (для тоста композера). */
+export type PublishPendingResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" | "no_channel" | "no_target" };
+
+/**
+ * Публикует одобренный пост из очереди в канал и убирает его из очереди (порт
+ * ветки `approve` в `approval_callback`). Цель проверяем здесь — на момент
+ * одобрения, а не постановки в очередь.
+ */
+export async function publishPending(
+  deps: PostingDeps,
+  pendingId: string,
+): Promise<PublishPendingResult> {
+  const pending = await getPending(deps.prisma, pendingId);
+  if (pending === null) {
+    return { ok: false, reason: "not_found" };
+  }
+  const channel = await getPostingChannel(deps.prisma);
+  if (channel === null) {
+    return { ok: false, reason: "no_channel" };
+  }
+  if (channel.chatId === null) {
+    return { ok: false, reason: "no_target" };
+  }
+  await safeSend(deps.api, channel.chatId, buildPostMessage(pending));
+  await deletePending(deps.prisma, pendingId);
+  deps.logger.info({ pendingId, channelId: channel.id }, "пост опубликован (одобрен)");
+  return { ok: true };
+}
+
+/** Результат отправки тестового превью из меню. */
+export type PreviewNowResult =
+  | { ok: true }
+  | { ok: false; reason: "no_channel" | "no_post" };
+
+/**
+ * Шлёт админу превью на одобрение для ПЕРВОГО поста сегодня (кнопка «👀 Прислать
+ * превью (тест)» в меню) — порт `cmd_preview`. Не зависит от тумблера одобрения.
+ */
+export async function requestApprovalForToday(
+  deps: PostingDeps,
+): Promise<PreviewNowResult> {
+  const channel = await getPostingChannel(deps.prisma);
+  if (channel === null) {
+    return { ok: false, reason: "no_channel" };
+  }
+  const { today, week } = resolveNow(channel);
+  const posts = await getPostsForDay(deps.prisma, channel.id, week, today.weekday);
+  const first = posts[0];
+  if (first === undefined) {
+    return { ok: false, reason: "no_post" };
+  }
+  await requestApproval(deps, channel.id, channel.chatId, first);
+  return { ok: true };
 }
