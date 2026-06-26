@@ -1,16 +1,48 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import type { PrismaClient } from "../client.js";
-import type { PostSeed } from "../../core/content/postSchema.js";
+import {
+  buttonSchema,
+  choiceSchema,
+  type Button,
+  type Choice,
+  type PostSeed,
+} from "../../core/content/postSchema.js";
 import type { Weekday } from "../../core/schedule/localDate.js";
 
-/** Пост, готовый к публикации (текст + источники фото; кнопки — Шаг 6b). */
-export interface PostToPublish {
+/** Тип интерактива поста (совпадает с enum InteractiveType в schema.prisma). */
+export type InteractiveType =
+  | "keyword_trigger"
+  | "button_choice"
+  | "button_prediction"
+  | "vote_123";
+
+/** Поля интерактива поста (для построения кнопок, Шаг 6b). */
+export interface PostInteractive {
+  interactiveType: InteractiveType;
+  choices: Choice[] | null; // button_choice: [{label, answer}]
+  button: Button | null; // button_prediction: {type, label}
+}
+
+/** Пост, готовый к публикации (текст + источники фото + интерактив для кнопок). */
+export interface PostToPublish extends PostInteractive {
   externalId: number; // исходный id контент-плана — для трассировки снимка одобрения
   title: string;
   text: string;
   cta: string;
   pexelsQuery: string | null; // запрос для подбора фото (Шаг 6a)
   photoPath: string | null; // локальный файл из контент-плана (Шаг 6a)
+}
+
+/** Защитный разбор Json-поля `choices` в типизированные варианты (битое → null). */
+function parseChoices(value: Prisma.JsonValue): Choice[] | null {
+  const result = choiceSchema.array().safeParse(value);
+  return result.success ? result.data : null;
+}
+
+/** Защитный разбор Json-поля `button` в типизированную кнопку (битое → null). */
+function parseButton(value: Prisma.JsonValue): Button | null {
+  const result = buttonSchema.safeParse(value);
+  return result.success ? result.data : null;
 }
 
 /**
@@ -26,7 +58,7 @@ export async function getPostsForDay(
   week: number,
   day: Weekday,
 ): Promise<PostToPublish[]> {
-  return prisma.post.findMany({
+  const rows = await prisma.post.findMany({
     where: { channelId, week, day },
     select: {
       externalId: true,
@@ -35,9 +67,41 @@ export async function getPostsForDay(
       cta: true,
       pexelsQuery: true,
       photoPath: true,
+      interactiveType: true,
+      choices: true,
+      button: true,
     },
     orderBy: [{ time: "asc" }, { externalId: "asc" }],
   });
+  return rows.map((row) => ({
+    ...row,
+    choices: parseChoices(row.choices),
+    button: parseButton(row.button),
+  }));
+}
+
+/**
+ * Поля интерактива поста по (channelId, externalId) — для построения кнопок при
+ * публикации ОДОБРЕННОГО поста (у снимка `PendingPost` этих полей нет, берём из
+ * исходного `Post`). `null`, если поста нет.
+ */
+export async function getPostInteractive(
+  prisma: PrismaClient,
+  channelId: string,
+  externalId: number,
+): Promise<PostInteractive | null> {
+  const row = await prisma.post.findUnique({
+    where: { channelId_externalId: { channelId, externalId } },
+    select: { interactiveType: true, choices: true, button: true },
+  });
+  if (row === null) {
+    return null;
+  }
+  return {
+    interactiveType: row.interactiveType,
+    choices: parseChoices(row.choices),
+    button: parseButton(row.button),
+  };
 }
 
 /** Источники фото поста контент-плана (для «🔄 Другое фото» на одобрении, Шаг 6a). */

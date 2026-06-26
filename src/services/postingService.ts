@@ -2,9 +2,11 @@ import { type Api, GrammyError, InlineKeyboard, InputFile } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../db/client.js";
 import {
+  getPostInteractive,
   getPostsForDay,
   type PostToPublish,
 } from "../db/repositories/postRepository.js";
+import { buildPostKeyboard } from "./postButtons.js";
 import {
   getPostingChannel,
   type PostingChannel,
@@ -61,6 +63,17 @@ function photoSourcesOf(post: PostToPublish): {
   photoPath: string | null;
 } {
   return { pexelsQuery: post.pexelsQuery, photoPath: post.photoPath };
+}
+
+/** Клавиатура кнопок поста (Шаг 6b) из его интерактива; `undefined` — без кнопок. */
+function postKeyboard(channelId: string, post: PostToPublish): InlineKeyboard | undefined {
+  return buildPostKeyboard({
+    channelId,
+    externalId: post.externalId,
+    interactiveType: post.interactiveType,
+    choices: post.choices,
+    button: post.button,
+  });
 }
 
 /** Обрезает подпись под лимит Telegram (порт `[:1020]` Python-бота). */
@@ -207,7 +220,13 @@ export async function publishDuePosts(deps: PostingDeps): Promise<void> {
         );
       } else if (post !== undefined && channel.chatId !== null) {
         const photo = await resolvePhoto(deps, channel.id, photoSourcesOf(post));
-        await sendPost(deps, channel.chatId, buildPostMessage(post), photo);
+        await sendPost(
+          deps,
+          channel.chatId,
+          buildPostMessage(post),
+          photo,
+          postKeyboard(channel.id, post),
+        );
         logger.info(
           { channelId: channel.id, week, day: today.weekday, time, idx },
           "пост опубликован (авто)",
@@ -255,7 +274,13 @@ export async function publishNow(deps: PostingDeps): Promise<PublishNowResult> {
     return { ok: false, reason: "no_post" };
   }
   const photo = await resolvePhoto(deps, channel.id, photoSourcesOf(first));
-  await sendPost(deps, channel.chatId, buildPostMessage(first), photo);
+  await sendPost(
+    deps,
+    channel.chatId,
+    buildPostMessage(first),
+    photo,
+    postKeyboard(channel.id, first),
+  );
   logger.info({ channelId: channel.id, week }, "пост опубликован (вручную)");
   return { ok: true, week };
 }
@@ -331,11 +356,28 @@ export async function publishPending(
   if (channel.chatId === null) {
     return { ok: false, reason: "no_target" };
   }
+  // Кнопки берём из исходного поста контент-плана (у снимка их нет). Если пост
+  // создан не из плана (externalId === null) — публикуем без кнопок.
+  const interactive =
+    pending.externalId === null
+      ? null
+      : await getPostInteractive(deps.prisma, channel.id, pending.externalId);
+  const keyboard =
+    interactive === null
+      ? undefined
+      : buildPostKeyboard({
+          channelId: channel.id,
+          externalId: pending.externalId ?? 0,
+          interactiveType: interactive.interactiveType,
+          choices: interactive.choices,
+          button: interactive.button,
+        });
   await sendPost(
     deps,
     channel.chatId,
     buildPostMessage(pending),
     photoRefFromCache(pending.photoUrl),
+    keyboard,
   );
   await deletePending(deps.prisma, pendingId);
   deps.logger.info({ pendingId, channelId: channel.id }, "пост опубликован (одобрен)");

@@ -28,15 +28,21 @@ export const interactiveTypeSchema = z.enum([
   "vote_123",
 ]);
 
-const choiceSchema = z.object({
+export const choiceSchema = z.object({
   label: z.string().min(1),
   answer: z.string().min(1),
 });
 
-const buttonSchema = z.object({
+export const buttonSchema = z.object({
   type: z.string().min(1),
   label: z.string().min(1),
 });
+
+/** Вариант ответа `button_choice` (метка кнопки + заготовленный ответ). */
+export type Choice = z.infer<typeof choiceSchema>;
+
+/** Кнопка `button_prediction` (тип = ключ пула + метка на кнопке). */
+export type Button = z.infer<typeof buttonSchema>;
 
 /**
  * Сырой пост ровно в том виде, в каком лежит в content.json (snake_case,
