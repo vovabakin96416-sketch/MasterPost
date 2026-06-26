@@ -20,6 +20,7 @@ import {
   type PublishNowResult,
 } from "../../../services/postingService.js";
 import { toggleApproval } from "../../../services/approvalService.js";
+import { sendContentEndingNotice } from "../../../services/analyticsService.js";
 import {
   addTrigger,
   getActiveChannel,
@@ -66,6 +67,7 @@ import {
   renderEditButtonAnswerPrompt,
   renderButtonPoolByKey,
   buttonPoolKeyAt,
+  renderAnalytics,
 } from "./screens.js";
 import type { AdminDeps, PendingInput, Screen } from "./types.js";
 
@@ -582,6 +584,23 @@ async function routeCallback(
       await ctx.answerCallbackQuery({ text: "Ответ удалён" });
       return;
     }
+
+    case "an":
+      await editScreen(ctx, await renderAnalytics(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "anwarn":
+      await sendContentEndingNotice({
+        prisma: deps.prisma,
+        logger: deps.logger,
+        api: ctx.api,
+        adminId: deps.adminId,
+      });
+      await ctx.answerCallbackQuery({
+        text: "📨 Напоминание отправлено — проверь сообщение от бота ☝️",
+      });
+      return;
 
     case "soon":
       await ctx.answerCallbackQuery({ text: "Скоро 🛠" });

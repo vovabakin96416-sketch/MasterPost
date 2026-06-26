@@ -11,6 +11,7 @@ import { isApprovalEnabled } from "../../../services/approvalService.js";
 import { countPending } from "../../../db/repositories/pendingPostRepository.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js";
+import { shouldWarnContentEnding } from "../../../core/analytics/contentEnding.js";
 import {
   getTextPoolDetail,
   listButtonPools,
@@ -108,6 +109,7 @@ export const MAIN_SECTIONS: readonly Section[] = [
   { label: "📋 Одобрение постов", data: encodeCb("appr") },
   { label: "🗂 Контент-план", data: encodeCb("plan") },
   { label: "🔘 Кнопки под постами", data: encodeCb("bpl") },
+  { label: "📊 Аналитика", data: encodeCb("an") },
   { label: "⏳ AI-ответы (скоро)", data: encodeCb("soon") },
 ];
 
@@ -472,6 +474,41 @@ export async function renderApproval(deps: AdminDeps): Promise<Screen> {
         data: encodeCb("aptgl"),
       },
     ],
+    navRow(),
+  ];
+
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/**
+ * Экран — аналитика (Шаг 7a): текущая неделя контент-плана + статус напоминания о
+ * его конце. Отчёт по просмотрам/реакциям (через личный аккаунт) — подшаги 7b/7c.
+ */
+export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
+  const channel = await getPostingChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const today = localDateParts(new Date(), channel.timezone);
+  const start =
+    channel.campaignStart === null
+      ? null
+      : localDateParts(channel.campaignStart, channel.timezone);
+  const { week } = resolveCampaignDay(today, start);
+
+  const lines = [
+    "📊 Аналитика",
+    "",
+    `Контент-план: неделя ${String(week)} из 4`,
+    shouldWarnContentEnding(week)
+      ? "⚠️ Идёт последняя неделя — пора готовить контент на новый месяц."
+      : "Напоминание о конце контента придёт в воскресенье недели 4.",
+    "",
+    "Отчёт по просмотрам/реакциям подключим позже (нужен вход через личный аккаунт).",
+  ];
+
+  const rows: Btn[][] = [
+    [{ label: "📨 Прислать напоминание сейчас (тест)", data: encodeCb("anwarn") }],
     navRow(),
   ];
 

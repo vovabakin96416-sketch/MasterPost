@@ -4,6 +4,7 @@ import { createLogger } from "./lib/logger.js";
 import { createPrismaClient } from "./db/client.js";
 import { createBot } from "./telegram/bot.js";
 import { startScheduler } from "./scheduler/index.js";
+import { startAnalyticsScheduler } from "./scheduler/analytics.js";
 import { startHealthServer } from "./server/health.js";
 
 // Локально подхватываем .env (на хостинге переменные приходят из платформы,
@@ -51,9 +52,18 @@ async function main(): Promise<void> {
     pexelsApiKey: env.PEXELS_API_KEY,
   });
 
+  // Шаг 7a: планировщик аналитики (напоминание о конце контента, ВС 21:00 МСК).
+  const analyticsScheduler = startAnalyticsScheduler({
+    prisma,
+    logger,
+    api: bot.api,
+    adminId: env.ADMIN_ID,
+  });
+
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutting down");
     scheduler.stop();
+    analyticsScheduler.stop();
     void bot.stop();
     server.close();
     void prisma.$disconnect();
