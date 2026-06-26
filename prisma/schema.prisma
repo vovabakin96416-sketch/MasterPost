@@ -64,6 +64,7 @@ model Channel {
   cooldowns    Cooldown[]
   subscribers  Subscriber[]
   pendingPosts PendingPost[]
+  postMetrics  PostMetric[]
 }
 
 // Пост контент-плана. Поля повторяют content.json.
@@ -150,6 +151,25 @@ model PendingPost {
   createdAt  DateTime @default(now())
 
   @@index([channelId, createdAt])
+}
+
+// Снимок метрик поста канала, снятый через личный аккаунт (MTProto, Шаг 7c).
+// Токен бота просмотры постов не видит — их читает только личный аккаунт (GramJS).
+// Upsert по [channelId, messageId]: повторный прогон обновляет метрики, не плодит дубли.
+model PostMetric {
+  id          String   @id @default(cuid())
+  channelId   String
+  channel     Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  messageId   Int // id сообщения в канале (из MTProto)
+  views       Int      @default(0)
+  reactions   Int      @default(0)
+  replies     Int      @default(0)
+  preview     String // короткий текст поста (для отчёта/истории)
+  postedAt    DateTime // дата публикации сообщения
+  collectedAt DateTime @updatedAt // когда последний раз сняли метрики
+
+  @@unique([channelId, messageId])
+  @@index([channelId, postedAt])
 }
 
 // Подписчик канала (заготовка под аналитику).

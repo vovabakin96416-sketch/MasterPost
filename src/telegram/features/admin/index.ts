@@ -21,6 +21,7 @@ import {
 } from "../../../services/postingService.js";
 import { toggleApproval } from "../../../services/approvalService.js";
 import { sendContentEndingNotice } from "../../../services/analyticsService.js";
+import { sendWeeklyReportNow } from "../../../services/analytics/weeklyReportService.js";
 import {
   addTrigger,
   getActiveChannel,
@@ -599,6 +600,17 @@ async function routeCallback(
       });
       await ctx.answerCallbackQuery({
         text: "📨 Напоминание отправлено — проверь сообщение от бота ☝️",
+      });
+      return;
+
+    case "anrep":
+      await ctx.answerCallbackQuery({ text: "Собираю отчёт… ⏳" });
+      await sendWeeklyReportNow({
+        prisma: deps.prisma,
+        logger: deps.logger,
+        api: ctx.api,
+        adminId: deps.adminId,
+        mtproto: deps.mtproto,
       });
       return;
 

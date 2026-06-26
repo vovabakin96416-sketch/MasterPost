@@ -507,7 +507,7 @@ export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
       : "Напоминание о конце контента придёт в воскресенье недели 4.",
     "",
     mtprotoReady
-      ? "MTProto: настроен ✅ (отчёт по просмотрам подключим на следующем шаге)."
+      ? "MTProto: настроен ✅ — отчёт по просмотрам приходит в ПН 09:30 МСК."
       : "MTProto: не настроен ⚠️ — отчёт по просмотрам выключен.",
     mtprotoReady
       ? ""
@@ -516,8 +516,16 @@ export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
 
   const rows: Btn[][] = [
     [{ label: "📨 Прислать напоминание сейчас (тест)", data: encodeCb("anwarn") }],
-    navRow(),
   ];
+  if (mtprotoReady) {
+    rows.push([
+      {
+        label: "📊 Прислать отчёт по просмотрам (тест)",
+        data: encodeCb("anrep"),
+      },
+    ]);
+  }
+  rows.push(navRow());
 
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }

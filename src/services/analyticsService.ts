@@ -50,7 +50,7 @@ export function campaignWeekOf(
 }
 
 /** Отправляет админу текст с откатом Markdown; ошибку доставки только логируем. */
-async function sendToAdmin(deps: AnalyticsDeps, text: string): Promise<void> {
+export async function sendToAdmin(deps: AnalyticsDeps, text: string): Promise<void> {
   try {
     await deps.api.sendMessage(deps.adminId, text, { parse_mode: "Markdown" });
   } catch (err) {

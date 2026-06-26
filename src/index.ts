@@ -59,12 +59,14 @@ async function main(): Promise<void> {
     pexelsApiKey: env.PEXELS_API_KEY,
   });
 
-  // Шаг 7a: планировщик аналитики (напоминание о конце контента, ВС 21:00 МСК).
+  // Шаг 7a/7c: планировщик аналитики (напоминание ВС 21:00 МСК + отчёт по просмотрам
+  // ПН 09:30 МСК). `mtproto` пробрасываем для отчёта; без него отчёт тихо отключён.
   const analyticsScheduler = startAnalyticsScheduler({
     prisma,
     logger,
     api: bot.api,
     adminId: env.ADMIN_ID,
+    mtproto,
   });
 
   const shutdown = (signal: string): void => {

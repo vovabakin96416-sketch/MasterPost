@@ -1,5 +1,6 @@
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
+import type { PostMetricInput } from "../../core/analytics/weeklyReport.js";
 
 /**
  * MTProto-клиент (Шаг 7b) — единственный модуль, который импортирует тяжёлый GramJS.
@@ -12,6 +13,11 @@ import { StringSession } from "telegram/sessions/index.js";
 
 /** Сколько раз GramJS пере-подключается при обрыве связи. */
 const CONNECTION_RETRIES = 5;
+
+/** Сколько последних сообщений канала просматриваем (как `limit=30` в Python). */
+const RECENT_MESSAGES_LIMIT = 30;
+/** До скольких символов режем превью текста поста (отчёт обрежет ещё короче). */
+const PREVIEW_LENGTH = 80;
 
 /** Колбэки интерактивного входа — инъекция, чтобы readline жил в скрипте, а не тут. */
 export interface LoginPrompts {
@@ -53,6 +59,52 @@ export async function fetchSelfLabel(client: TelegramClient): Promise<string> {
     .filter((part): part is string => part !== undefined && part !== "")
     .join(" ");
   return name !== "" ? name : String(me.id);
+}
+
+/**
+ * Читает метрики постов канала за период (Шаг 7c) — порт цикла `iter_messages` из
+ * `weekly_stats_report`. Берём до 30 последних сообщений, останавливаемся, как только
+ * упёрлись в посты старше `since`; пропускаем сообщения без текста и медиа (служебные).
+ * Возвращаем плоский `PostMetricInput[]` — GramJS-типы наружу не «протекают».
+ * Клиент должен быть уже подключён (`connect()`); жизненным циклом управляет вызывающий.
+ */
+export async function fetchRecentPostMetrics(
+  client: TelegramClient,
+  channelTarget: string,
+  since: Date,
+): Promise<PostMetricInput[]> {
+  const entity = await client.getEntity(channelTarget);
+  const messages = await client.getMessages(entity, {
+    limit: RECENT_MESSAGES_LIMIT,
+  });
+  const sinceMs = since.getTime();
+  const metrics: PostMetricInput[] = [];
+
+  for (const msg of messages) {
+    const postedAt = new Date(msg.date * 1000);
+    if (postedAt.getTime() < sinceMs) {
+      break; // сообщения идут от новых к старым — дальше только старее
+    }
+    const text = msg.message;
+    if (text === "" && msg.media === undefined) {
+      continue; // служебное сообщение без контента
+    }
+    const reactions =
+      msg.reactions?.results.reduce(
+        (sum: number, r) => sum + r.count,
+        0,
+      ) ?? 0;
+    metrics.push({
+      messageId: msg.id,
+      views: msg.views ?? 0,
+      reactions,
+      replies: msg.replies?.replies ?? 0,
+      preview: text.slice(0, PREVIEW_LENGTH),
+      postedAt,
+    });
+  }
+
+  return metrics;
 }
 
 /**
