@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "seed": "tsx src/seed/index.ts"
+    "seed": "tsx src/seed/index.ts",
+    "gen-session": "tsx scripts/generateSession.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",
@@ -22,6 +23,7 @@
     "grammy": "^1.30.0",
     "pg": "^8.22.0",
     "pino": "^9.5.0",
+    "telegram": "^2.26.22",
     "zod": "^3.23.8"
   },
   "devDependencies": {

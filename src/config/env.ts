@@ -23,6 +23,13 @@ export const envSchema = z.object({
   // Ключ Pexels для подбора фото (Шаг 6a, бесплатная версия). Опционален: без него
   // бот корректно публикует посты без фото (мягкая деградация, как в Python-боте).
   PEXELS_API_KEY: z.string().optional(),
+  // MTProto/GramJS для аналитики просмотров (Шаг 7b). Все три ОПЦИОНАЛЬНЫ: без них
+  // отчёт по просмотрам (7c) отключён, бот работает как раньше (как с PEXELS_API_KEY).
+  // ⚠️ TELEGRAM_SESSION = полный доступ к личному аккаунту — только в env, НЕ в git.
+  // Получить api_id/api_hash: my.telegram.org; SESSION: `npm run gen-session`.
+  TELEGRAM_API_ID: z.coerce.number().int().positive().optional(),
+  TELEGRAM_API_HASH: z.string().optional(),
+  TELEGRAM_SESSION: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

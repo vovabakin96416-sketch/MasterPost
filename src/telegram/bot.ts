@@ -4,11 +4,13 @@ import { createAdminComposer } from "./features/admin/index.js";
 import { createApprovalComposer } from "./features/approval/index.js";
 import { createPostButtonsComposer } from "./features/postButtons/index.js";
 import type { CommentDeps } from "./features/comments/types.js";
+import type { MtprotoConfig } from "../services/analytics/mtprotoConfig.js";
 
-/** Зависимости бота: стадии-комментов + id админа для меню + ключ Pexels (фото). */
+/** Зависимости бота: стадии-комментов + id админа для меню + ключ Pexels + статус MTProto. */
 export interface BotDeps extends CommentDeps {
   adminId: number;
   pexelsApiKey: string | undefined;
+  mtproto: MtprotoConfig;
 }
 
 /**

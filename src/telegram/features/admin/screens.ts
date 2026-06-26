@@ -12,6 +12,7 @@ import { countPending } from "../../../db/repositories/pendingPostRepository.js"
 import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js";
 import { shouldWarnContentEnding } from "../../../core/analytics/contentEnding.js";
+import { isMtprotoConfigured } from "../../../services/analytics/mtprotoConfig.js";
 import {
   getTextPoolDetail,
   listButtonPools,
@@ -496,6 +497,7 @@ export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
       : localDateParts(channel.campaignStart, channel.timezone);
   const { week } = resolveCampaignDay(today, start);
 
+  const mtprotoReady = isMtprotoConfigured(deps.mtproto);
   const lines = [
     "📊 Аналитика",
     "",
@@ -504,7 +506,12 @@ export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
       ? "⚠️ Идёт последняя неделя — пора готовить контент на новый месяц."
       : "Напоминание о конце контента придёт в воскресенье недели 4.",
     "",
-    "Отчёт по просмотрам/реакциям подключим позже (нужен вход через личный аккаунт).",
+    mtprotoReady
+      ? "MTProto: настроен ✅ (отчёт по просмотрам подключим на следующем шаге)."
+      : "MTProto: не настроен ⚠️ — отчёт по просмотрам выключен.",
+    mtprotoReady
+      ? ""
+      : "Чтобы включить: задай TELEGRAM_API_ID/HASH и получи сессию командой `npm run gen-session`.",
   ];
 
   const rows: Btn[][] = [

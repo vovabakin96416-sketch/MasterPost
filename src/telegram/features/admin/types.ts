@@ -1,6 +1,7 @@
 import type { InlineKeyboard } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../../../db/client.js";
+import type { MtprotoConfig } from "../../../services/analytics/mtprotoConfig.js";
 
 /**
  * Меню админа (Шаг 3) — изолированный Composer `adminMenu`. Порт `cmd_menu` /
@@ -8,12 +9,15 @@ import type { PrismaClient } from "../../../db/client.js";
  * и доступом только администратору (`adminId`).
  */
 
-/** Зависимости меню: БД, логгер, id единственного админа и ключ Pexels (фото). */
+/** Зависимости меню: БД, логгер, id админа, ключ Pexels (фото) и статус MTProto. */
 export interface AdminDeps {
   prisma: PrismaClient;
   logger: Logger;
   adminId: number;
   pexelsApiKey: string | undefined;
+  // Шаг 7b: только для строки статуса в «📊 Аналитика». Это ЧИСТЫЙ конфиг (без GramJS) —
+  // меню не тянет тяжёлый mtprotoClient в импорт-граф запущенного бота.
+  mtproto: MtprotoConfig;
 }
 
 /**

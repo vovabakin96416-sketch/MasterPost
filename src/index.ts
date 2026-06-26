@@ -36,11 +36,18 @@ async function main(): Promise<void> {
 
   const server = startHealthServer(env.PORT, logger);
   const prisma = createPrismaClient(env.DATABASE_URL);
+  // Шаг 7b: чистый конфиг MTProto (без GramJS) — только для статуса в меню «Аналитика».
+  const mtproto = {
+    apiId: env.TELEGRAM_API_ID,
+    apiHash: env.TELEGRAM_API_HASH,
+    session: env.TELEGRAM_SESSION,
+  };
   const bot = createBot(env.BOT_TOKEN, {
     prisma,
     logger,
     adminId: env.ADMIN_ID,
     pexelsApiKey: env.PEXELS_API_KEY,
+    mtproto,
   });
 
   // Шаг 4: планировщик автопостинга (тик раз в минуту через bot.api).
