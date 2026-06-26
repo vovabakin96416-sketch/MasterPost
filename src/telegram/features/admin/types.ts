@@ -41,4 +41,10 @@ export type PendingInput =
       readonly kind: "editPostField";
       readonly field: "title" | "text" | "cta";
       readonly externalId: number;
+    }
+  | { readonly kind: "addButtonAnswer"; readonly poolKey: string }
+  | {
+      readonly kind: "editButtonAnswer";
+      readonly poolKey: string;
+      readonly index: number;
     };

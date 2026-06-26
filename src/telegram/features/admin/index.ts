@@ -34,6 +34,7 @@ import {
 } from "../../../db/repositories/textPoolRepository.js";
 import {
   deletePost,
+  getButtonPoolMeta,
   getPostDetail,
   updatePostField,
 } from "../../../db/repositories/postRepository.js";
@@ -58,6 +59,13 @@ import {
   renderEditPostFieldPrompt,
   renderDeletePostConfirm,
   postFieldByCode,
+  renderButtonPools,
+  renderButtonPool,
+  renderButtonAnswer,
+  renderAddButtonAnswerPrompt,
+  renderEditButtonAnswerPrompt,
+  renderButtonPoolByKey,
+  buttonPoolKeyAt,
 } from "./screens.js";
 import type { AdminDeps, PendingInput, Screen } from "./types.js";
 
@@ -478,6 +486,98 @@ async function routeCallback(
       return;
     }
 
+    case "bpl":
+      await editScreen(ctx, await renderButtonPools(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "bpo": {
+      const poolIdx = intArg(args, 0);
+      if (poolIdx === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await editScreen(ctx, await renderButtonPool(deps, poolIdx, intArg(args, 1) ?? 0));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "bia": {
+      const poolIdx = intArg(args, 0);
+      const ansIdx = intArg(args, 1);
+      if (poolIdx === null || ansIdx === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await editScreen(ctx, await renderButtonAnswer(deps, poolIdx, ansIdx));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "baa": {
+      const poolIdx = intArg(args, 0);
+      const key = poolIdx === null ? undefined : await buttonPoolKeyAt(deps, poolIdx);
+      if (poolIdx === null || key === undefined) {
+        await editScreen(ctx, await renderButtonPools(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      pending.set(adminId, { kind: "addButtonAnswer", poolKey: key });
+      await editScreen(
+        ctx,
+        renderAddButtonAnswerPrompt(await buttonPoolName(deps, key), poolIdx),
+      );
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "bea": {
+      const poolIdx = intArg(args, 0);
+      const ansIdx = intArg(args, 1);
+      const key = poolIdx === null ? undefined : await buttonPoolKeyAt(deps, poolIdx);
+      if (poolIdx === null || ansIdx === null || key === undefined) {
+        await editScreen(ctx, await renderButtonPools(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const current = await answerAt(deps, key, ansIdx);
+      if (current === undefined) {
+        await editScreen(ctx, await renderButtonPool(deps, poolIdx, 0));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      pending.set(adminId, { kind: "editButtonAnswer", poolKey: key, index: ansIdx });
+      await editScreen(
+        ctx,
+        renderEditButtonAnswerPrompt(
+          await buttonPoolName(deps, key),
+          poolIdx,
+          ansIdx,
+          current,
+        ),
+      );
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "bda": {
+      const poolIdx = intArg(args, 0);
+      const ansIdx = intArg(args, 1);
+      const key = poolIdx === null ? undefined : await buttonPoolKeyAt(deps, poolIdx);
+      if (poolIdx === null || ansIdx === null || key === undefined) {
+        await editScreen(ctx, await renderButtonPools(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const channel = await getActiveChannel(deps.prisma);
+      if (channel !== null) {
+        await removeText(deps.prisma, channel.id, key, ansIdx);
+      }
+      await editScreen(ctx, await renderButtonPool(deps, poolIdx, 0));
+      await ctx.answerCallbackQuery({ text: "Ответ удалён" });
+      return;
+    }
+
     case "soon":
       await ctx.answerCallbackQuery({ text: "Скоро 🛠" });
       return;
@@ -598,6 +698,38 @@ async function handleInput(
       await sendScreen(ctx, await renderPlanPost(deps, state.externalId));
       return;
     }
+
+    case "addButtonAnswer": {
+      const result = validateAnswer(text);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+        return;
+      }
+      await addText(deps.prisma, channel.id, state.poolKey, result.value);
+      pending.delete(deps.adminId);
+      await ctx.reply("✅ Ответ добавлен.");
+      await sendScreen(ctx, await renderButtonPoolByKey(deps, state.poolKey));
+      return;
+    }
+
+    case "editButtonAnswer": {
+      const result = validateAnswer(text);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+        return;
+      }
+      const ok = await updateText(
+        deps.prisma,
+        channel.id,
+        state.poolKey,
+        state.index,
+        result.value,
+      );
+      pending.delete(deps.adminId);
+      await ctx.reply(ok ? "✅ Ответ изменён." : "⚠️ Ответ не найден (возможно, удалён).");
+      await sendScreen(ctx, await renderButtonPoolByKey(deps, state.poolKey));
+      return;
+    }
   }
 }
 
@@ -647,6 +779,16 @@ async function answerAt(
   }
   const texts = (await getTextPool(deps.prisma, channel.id, word)) ?? [];
   return texts[answerIdx];
+}
+
+/** Человекочитаемая подпись пула кнопок: label из поста или сам ключ (доработка 6b). */
+async function buttonPoolName(deps: AdminDeps, key: string): Promise<string> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return key;
+  }
+  const meta = await getButtonPoolMeta(deps.prisma, channel.id);
+  return meta.get(key)?.label ?? key;
 }
 
 /** Экран триггера, найденного по слову (индекс резолвим из актуального списка). */

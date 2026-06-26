@@ -13,9 +13,11 @@ import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js";
 import {
   getTextPoolDetail,
+  listButtonPools,
   listTriggerSummaries,
 } from "../../../db/repositories/textPoolRepository.js";
 import {
+  getButtonPoolMeta,
   getPlanOverview,
   getPostsForWeek,
   getPostDetail,
@@ -105,6 +107,7 @@ export const MAIN_SECTIONS: readonly Section[] = [
   { label: "📅 Автопостинг", data: encodeCb("auto") },
   { label: "📋 Одобрение постов", data: encodeCb("appr") },
   { label: "🗂 Контент-план", data: encodeCb("plan") },
+  { label: "🔮 Кнопки-предсказания", data: encodeCb("bpl") },
   { label: "⏳ AI-ответы (скоро)", data: encodeCb("soon") },
 ];
 
@@ -661,4 +664,197 @@ export async function renderDeletePostConfirm(
       [{ label: "◀ Отмена", data: encodeCb("pp", externalId) }],
     ]),
   };
+}
+
+/** Ключ пула кнопок по индексу в актуальном (детерминированном) списке или undefined. */
+export async function buttonPoolKeyAt(
+  deps: AdminDeps,
+  poolIdx: number,
+): Promise<string | undefined> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return undefined;
+  }
+  const pools = await listButtonPools(deps.prisma, channel.id);
+  return pools[poolIdx]?.key;
+}
+
+/** Экран — список пулов кнопок-предсказаний (доработка 6b). */
+export async function renderButtonPools(deps: AdminDeps): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const [pools, meta] = await Promise.all([
+    listButtonPools(deps.prisma, channel.id),
+    getButtonPoolMeta(deps.prisma, channel.id),
+  ]);
+  const pg = paginate(pools, 0, PAGE_ANSWERS);
+  const now = new Date();
+
+  const rows: Btn[][] = pg.slice.map((pool, i) => {
+    const globalIdx = pg.page * PAGE_ANSWERS + i;
+    const name = meta.get(pool.key)?.label ?? pool.key;
+    const spare = meta.has(pool.key) ? "" : " · про запас";
+    const warn = poolHealth(pool.count, pool.updatedAt, now).stale ? " ⚠️" : "";
+    return [
+      {
+        label: `🔮 ${name} · ${String(pool.count)} ${pluralAnswers(pool.count)}${spare}${warn} ›`,
+        data: encodeCb("bpo", globalIdx, 0),
+      },
+    ];
+  });
+  rows.push(navRow());
+
+  const header =
+    pools.length === 0
+      ? "🔮 Кнопки-предсказания\n\nПулов пока нет. Залей контент: `npm run seed`."
+      : `🔮 Кнопки-предсказания (${String(pools.length)})\n\nПулы ответов для кнопок под постами. Нажми кнопку «предсказание» под постом — бот шлёт случайный ответ из пула в личку. «Про запас» = пул пока не привязан ни к одной кнопке.`;
+  return { text: header, keyboard: buildKeyboard(rows) };
+}
+
+/** Экран — один пул кнопок: его ответы + добавить/изменить/удалить (доработка 6b). */
+export async function renderButtonPool(
+  deps: AdminDeps,
+  poolIdx: number,
+  page: number,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const [pools, meta] = await Promise.all([
+    listButtonPools(deps.prisma, channel.id),
+    getButtonPoolMeta(deps.prisma, channel.id),
+  ]);
+  const pool = pools[poolIdx];
+  if (pool === undefined) {
+    return {
+      text: "Пул не найден — возможно, список изменился.",
+      keyboard: buildKeyboard([navRow(encodeCb("bpl"))]),
+    };
+  }
+  const name = meta.get(pool.key)?.label ?? pool.key;
+  const detail = await getTextPoolDetail(deps.prisma, channel.id, pool.key);
+  const texts = detail?.texts ?? [];
+  const pg = paginate(texts, page, PAGE_ANSWERS);
+
+  const rows: Btn[][] = pg.slice.map((text, i) => {
+    const globalIdx = pg.page * PAGE_ANSWERS + i;
+    return [
+      {
+        label: `${String(globalIdx + 1)}. ${preview(text)}`,
+        data: encodeCb("bia", poolIdx, globalIdx),
+      },
+    ];
+  });
+  rows.push([{ label: "➕ Добавить ответ", data: encodeCb("baa", poolIdx) }]);
+  const pager = pageRow(pg.page, pg.hasPrev, pg.hasNext, (p) =>
+    encodeCb("bpo", poolIdx, p),
+  );
+  if (pager.length > 0) {
+    rows.push(pager);
+  }
+  rows.push(navRow(encodeCb("bpl")));
+
+  const spareNote = meta.has(pool.key)
+    ? ""
+    : "\n💤 Пул пока не подключён к кнопке поста — можно наполнить заранее.";
+  let header: string;
+  if (texts.length === 0) {
+    header = `🔮 «${name}»\n\nОтветов пока нет. Добавь первый — и кнопка начнёт отвечать им в личку.${spareNote}`;
+  } else {
+    const now = new Date();
+    const health = poolHealth(texts.length, detail?.updatedAt ?? null, now);
+    const age = poolAgeDays(detail?.updatedAt ?? null, now);
+    const ageLine =
+      age === null ? "" : `\nОбновлён ${String(age)} ${pluralDays(age)} назад.`;
+    const hint = health.stale
+      ? health.reason === "few"
+        ? "\n⚠️ Мало ответов — добавь ещё, чтобы не приедались."
+        : "\n⚠️ Давно не обновлялся — освежи ответы."
+      : "";
+    header = `🔮 «${name}» — ${String(texts.length)} ${pluralAnswers(texts.length)}${ageLine}${hint}${spareNote}\n\nНажми ответ, чтобы изменить или удалить.`;
+  }
+  return { text: header, keyboard: buildKeyboard(rows) };
+}
+
+/** Экран — один ответ пула кнопок: полный текст + изменить/удалить (доработка 6b). */
+export async function renderButtonAnswer(
+  deps: AdminDeps,
+  poolIdx: number,
+  answerIdx: number,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const key = await buttonPoolKeyAt(deps, poolIdx);
+  if (key === undefined) {
+    return {
+      text: "Пул не найден — возможно, список изменился.",
+      keyboard: buildKeyboard([navRow(encodeCb("bpl"))]),
+    };
+  }
+  const detail = await getTextPoolDetail(deps.prisma, channel.id, key);
+  const texts = detail?.texts ?? [];
+  const answer = texts[answerIdx];
+  if (answer === undefined) {
+    return {
+      text: "Ответ не найден — возможно, он был удалён.",
+      keyboard: buildKeyboard([navRow(encodeCb("bpo", poolIdx, 0))]),
+    };
+  }
+  return {
+    text: `Ответ #${String(answerIdx + 1)}:\n\n${answer}`,
+    keyboard: buildKeyboard([
+      [
+        { label: "✏️ Изменить", data: encodeCb("bea", poolIdx, answerIdx) },
+        { label: "🗑 Удалить", data: encodeCb("bda", poolIdx, answerIdx) },
+      ],
+      navRow(encodeCb("bpo", poolIdx, 0)),
+    ]),
+  };
+}
+
+/** Экран-приглашение: жду новый ответ для пула кнопок (доработка 6b). */
+export function renderAddButtonAnswerPrompt(name: string, poolIdx: number): Screen {
+  return {
+    text:
+      `➕ Новый ответ для «${name}»\n\nПришли текст одним сообщением.\n` +
+      "Можно использовать {name} — подставится имя пользователя.",
+    keyboard: buildKeyboard([navRow(encodeCb("bpo", poolIdx, 0))]),
+  };
+}
+
+/** Экран-приглашение: жду новый текст редактируемого ответа пула кнопок (доработка 6b). */
+export function renderEditButtonAnswerPrompt(
+  name: string,
+  poolIdx: number,
+  answerIdx: number,
+  current: string,
+): Screen {
+  return {
+    text:
+      `✏️ Изменить ответ #${String(answerIdx + 1)} для «${name}»\n\n` +
+      `Текущий текст:\n${current}\n\nПришли новый текст одним сообщением.`,
+    keyboard: buildKeyboard([navRow(encodeCb("bia", poolIdx, answerIdx))]),
+  };
+}
+
+/** Экран пула кнопок, найденного по ключу (индекс резолвим из актуального списка). */
+export async function renderButtonPoolByKey(
+  deps: AdminDeps,
+  key: string,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return renderMain();
+  }
+  const pools = await listButtonPools(deps.prisma, channel.id);
+  const idx = pools.findIndex((p) => p.key === key);
+  if (idx === -1) {
+    return renderButtonPools(deps);
+  }
+  return renderButtonPool(deps, idx, 0);
 }

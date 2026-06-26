@@ -54,6 +54,10 @@ describe("callbackData: encode/decode round-trip", () => {
       encodeCb("pp", 999),
       encodeCb("ped", 2, 999),
       encodeCb("pdel", 999),
+      encodeCb("bpo", 99, 99),
+      encodeCb("bia", 99, 999),
+      encodeCb("bea", 99, 999),
+      encodeCb("bda", 99, 999),
     ]) {
       expect(cbByteLength(data)).toBeLessThanOrEqual(CB_MAX_BYTES);
     }

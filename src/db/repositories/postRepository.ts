@@ -104,6 +104,30 @@ export async function getPostInteractive(
   };
 }
 
+/**
+ * Подписи пулов кнопок-предсказаний по их `button.type` (доработка 6b): сканирует
+ * `button_prediction`-посты канала и возвращает `Map<type, {label}>`. Наличие ключа
+ * в Map = пул реально подключён к кнопке поста (плюс человекочитаемая подпись для
+ * меню); отсутствие = пул засеян «про запас», ни один пост на него не ссылается.
+ */
+export async function getButtonPoolMeta(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<Map<string, { label: string }>> {
+  const rows = await prisma.post.findMany({
+    where: { channelId, interactiveType: "button_prediction" },
+    select: { button: true },
+  });
+  const meta = new Map<string, { label: string }>();
+  for (const row of rows) {
+    const button = parseButton(row.button);
+    if (button !== null) {
+      meta.set(button.type, { label: button.label });
+    }
+  }
+  return meta;
+}
+
 /** Источники фото поста контент-плана (для «🔄 Другое фото» на одобрении, Шаг 6a). */
 export async function getPostPhotoSources(
   prisma: PrismaClient,

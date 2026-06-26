@@ -92,6 +92,35 @@ export async function listTriggerSummaries(
   });
 }
 
+/** Сводка по пулу для списка в меню: ключ, число ответов, дата изменения. */
+export interface PoolSummary {
+  readonly key: string;
+  readonly count: number;
+  readonly updatedAt: Date;
+}
+
+/**
+ * Пулы кнопок-предсказаний канала (доработка 6b): строки `TextPool` с ключом-
+ * префиксом `button_` (button_cards/button_love/button_money). Префикс надёжно
+ * отделяет их от слов-триггеров и пулов-сирот karta/kofe/runa. Порядок по ключу —
+ * детерминированный, чтобы индекс пула в callback меню был стабилен.
+ */
+export async function listButtonPools(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<PoolSummary[]> {
+  const pools = await prisma.textPool.findMany({
+    where: { channelId, key: { startsWith: "button_" } },
+    select: { key: true, texts: true, updatedAt: true },
+    orderBy: { key: "asc" },
+  });
+  return pools.map((p) => ({
+    key: p.key,
+    count: p.texts.length,
+    updatedAt: p.updatedAt,
+  }));
+}
+
 /** Добавляет один ответ в пул (создаёт пул, если его нет). Шаг 3. */
 export async function addText(
   prisma: PrismaClient,
