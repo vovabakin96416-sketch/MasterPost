@@ -116,6 +116,129 @@ export async function getPostPhotoSources(
   });
 }
 
+/** Сводка контент-плана: неделя + число постов в ней (Шаг 6.5, список недель). */
+export interface PlanWeek {
+  week: number;
+  count: number;
+}
+
+/**
+ * Недели контент-плана канала с числом постов в каждой (Шаг 6.5).
+ * Постов мало (десятки) → читаем `week` всех постов и сводим в памяти.
+ */
+export async function getPlanOverview(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<PlanWeek[]> {
+  const rows = await prisma.post.findMany({
+    where: { channelId },
+    select: { week: true },
+  });
+  const counts = new Map<number, number>();
+  for (const row of rows) {
+    counts.set(row.week, (counts.get(row.week) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([week, count]) => ({ week, count }))
+    .sort((a, b) => a.week - b.week);
+}
+
+/** Строка списка постов недели (Шаг 6.5): минимум для кнопки + перехода. */
+export interface PlanPostRow {
+  externalId: number;
+  day: Weekday;
+  time: string;
+  title: string;
+  interactiveType: InteractiveType;
+}
+
+/**
+ * Посты недели по порядку день→время (Шаг 6.5, экран недели).
+ * ⚠️ Postgres-enum `Weekday` определён monday…sunday → `orderBy day asc` даёт
+ * естественный порядок дней недели, не алфавитный.
+ */
+export async function getPostsForWeek(
+  prisma: PrismaClient,
+  channelId: string,
+  week: number,
+): Promise<PlanPostRow[]> {
+  return prisma.post.findMany({
+    where: { channelId, week },
+    select: {
+      externalId: true,
+      day: true,
+      time: true,
+      title: true,
+      interactiveType: true,
+    },
+    orderBy: [{ day: "asc" }, { time: "asc" }],
+  });
+}
+
+/** Поле поста, которое редактируем из меню (Шаг 6.5). */
+export type EditablePostField = "title" | "text" | "cta";
+
+/** Полные данные поста для экрана редактирования (Шаг 6.5). */
+export interface PlanPostDetail {
+  externalId: number;
+  week: number;
+  day: Weekday;
+  time: string;
+  title: string;
+  text: string;
+  cta: string;
+  interactiveType: InteractiveType;
+}
+
+/** Пост по (channelId, externalId) для экрана правки (Шаг 6.5) или `null`. */
+export async function getPostDetail(
+  prisma: PrismaClient,
+  channelId: string,
+  externalId: number,
+): Promise<PlanPostDetail | null> {
+  return prisma.post.findUnique({
+    where: { channelId_externalId: { channelId, externalId } },
+    select: {
+      externalId: true,
+      week: true,
+      day: true,
+      time: true,
+      title: true,
+      text: true,
+      cta: true,
+      interactiveType: true,
+    },
+  });
+}
+
+/**
+ * Обновляет одно текстовое поле поста контент-плана (Шаг 6.5). Меняет РЕАЛЬНУЮ
+ * строку `Post` (не снимок одобрения) → влияет на все будущие публикации этого
+ * (week, day). Возвращает `false`, если поста нет (был удалён).
+ */
+export async function updatePostField(
+  prisma: PrismaClient,
+  channelId: string,
+  externalId: number,
+  field: EditablePostField,
+  value: string,
+): Promise<boolean> {
+  const result = await prisma.post.updateMany({
+    where: { channelId, externalId },
+    data: { [field]: value },
+  });
+  return result.count > 0;
+}
+
+/** Удаляет пост контент-плана по (channelId, externalId) (Шаг 6.5). */
+export async function deletePost(
+  prisma: PrismaClient,
+  channelId: string,
+  externalId: number,
+): Promise<void> {
+  await prisma.post.deleteMany({ where: { channelId, externalId } });
+}
+
 /**
  * Идемпотентно создаёт/обновляет пост канала по паре (channelId, externalId).
  *

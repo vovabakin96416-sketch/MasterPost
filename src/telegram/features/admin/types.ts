@@ -36,4 +36,9 @@ export type PendingInput =
   | { readonly kind: "addAnswer"; readonly word: string }
   | { readonly kind: "editAnswer"; readonly word: string; readonly index: number }
   | { readonly kind: "addTime" }
-  | { readonly kind: "setChannel" };
+  | { readonly kind: "setChannel" }
+  | {
+      readonly kind: "editPostField";
+      readonly field: "title" | "text" | "cta";
+      readonly externalId: number;
+    };

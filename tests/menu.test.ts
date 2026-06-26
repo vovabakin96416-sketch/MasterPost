@@ -9,7 +9,9 @@ import {
 import { paginate } from "../src/core/menu/paginate";
 import {
   MAX_ANSWER_LENGTH,
+  POST_FIELD_LIMITS,
   validateAnswer,
+  validatePostField,
   validateTriggerWord,
 } from "../src/core/menu/validation";
 
@@ -48,6 +50,10 @@ describe("callbackData: encode/decode round-trip", () => {
       encodeCb("ans", 999, 999),
       encodeCb("edita", 999, 999),
       encodeCb("tgl", "comments"),
+      encodeCb("pw", 99, 99),
+      encodeCb("pp", 999),
+      encodeCb("ped", 2, 999),
+      encodeCb("pdel", 999),
     ]) {
       expect(cbByteLength(data)).toBeLessThanOrEqual(CB_MAX_BYTES);
     }
@@ -107,6 +113,41 @@ describe("validateAnswer", () => {
   it("нормальное → ок, обрезает по краям", () => {
     const r = validateAnswer("  Привет, {name}!  ");
     expect(r).toEqual({ ok: true, value: "Привет, {name}!" });
+  });
+});
+
+describe("validatePostField (лимиты по полю)", () => {
+  it("пустое/из пробелов → ошибка для любого поля", () => {
+    expect(validatePostField("", "title").ok).toBe(false);
+    expect(validatePostField("   ", "text").ok).toBe(false);
+    expect(validatePostField("\n\t", "cta").ok).toBe(false);
+  });
+
+  it("нормальное → ок, обрезает по краям", () => {
+    expect(validatePostField("  Новый заголовок  ", "title")).toEqual({
+      ok: true,
+      value: "Новый заголовок",
+    });
+  });
+
+  it("превышение лимита поля → ошибка", () => {
+    expect(validatePostField("x".repeat(POST_FIELD_LIMITS.title + 1), "title").ok).toBe(
+      false,
+    );
+    expect(validatePostField("x".repeat(POST_FIELD_LIMITS.cta + 1), "cta").ok).toBe(false);
+    expect(validatePostField("x".repeat(POST_FIELD_LIMITS.text + 1), "text").ok).toBe(
+      false,
+    );
+  });
+
+  it("на границе лимита поля → ок", () => {
+    expect(validatePostField("x".repeat(POST_FIELD_LIMITS.title), "title").ok).toBe(true);
+  });
+
+  it("у text лимит больше, чем у title", () => {
+    const between = "x".repeat(POST_FIELD_LIMITS.title + 50);
+    expect(validatePostField(between, "title").ok).toBe(false);
+    expect(validatePostField(between, "text").ok).toBe(true);
   });
 });
 

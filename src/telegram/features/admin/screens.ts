@@ -15,6 +15,12 @@ import {
   getTextPoolDetail,
   listTriggerSummaries,
 } from "../../../db/repositories/textPoolRepository.js";
+import {
+  getPlanOverview,
+  getPostsForWeek,
+  getPostDetail,
+  type EditablePostField,
+} from "../../../db/repositories/postRepository.js";
 import { getBooleanSetting } from "../../../db/repositories/settingRepository.js";
 import { buildKeyboard, navRow, pageRow, preview, type Btn } from "./keyboard.js";
 import type { AdminDeps, Screen } from "./types.js";
@@ -31,9 +37,10 @@ import type { AdminDeps, Screen } from "./types.js";
 /** Кулдаун триггеров, часов (read-only в меню; синхронно с triggerStage). */
 const COOLDOWN_HOURS = 24;
 
-/** Сколько триггеров/ответов показываем на одной странице списка. */
+/** Сколько триггеров/ответов/постов показываем на одной странице списка. */
 const PAGE_TRIGGERS = 8;
 const PAGE_ANSWERS = 6;
+const PAGE_POSTS = 8;
 
 /** Ключ настройки «отвечать в комментах» (как в Шаге 2). */
 const COMMENTS_KEY = "comments_enabled";
@@ -49,6 +56,24 @@ function pluralAnswers(n: number): string {
     return "ответа";
   }
   return "ответов";
+}
+
+/** Русское склонение «пост / поста / постов». */
+function pluralPosts(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return "пост";
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    return "поста";
+  }
+  return "постов";
+}
+
+/** Усечение многострочного текста для показа в экране (новые строки сохраняем). */
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
 /** Русское склонение «день / дня / дней». */
@@ -79,6 +104,7 @@ export const MAIN_SECTIONS: readonly Section[] = [
   { label: "📊 Статус", data: encodeCb("stat") },
   { label: "📅 Автопостинг", data: encodeCb("auto") },
   { label: "📋 Одобрение постов", data: encodeCb("appr") },
+  { label: "🗂 Контент-план", data: encodeCb("plan") },
   { label: "⏳ AI-ответы (скоро)", data: encodeCb("soon") },
 ];
 
@@ -91,6 +117,33 @@ const DAY_RU: Record<string, string> = {
   friday: "пятница",
   saturday: "суббота",
   sunday: "воскресенье",
+};
+
+/** Сокращённые дни недели для компактных кнопок списка постов (Шаг 6.5). */
+const DAY_SHORT_RU: Record<string, string> = {
+  monday: "Пн",
+  tuesday: "Вт",
+  wednesday: "Ср",
+  thursday: "Чт",
+  friday: "Пт",
+  saturday: "Сб",
+  sunday: "Вс",
+};
+
+/** Тип интерактива поста по-русски (для экрана поста, Шаг 6.5). */
+const INTERACTIVE_RU: Record<string, string> = {
+  keyword_trigger: "слово-триггер",
+  button_choice: "кнопки-варианты",
+  button_prediction: "кнопка-предсказание",
+  vote_123: "голосование",
+};
+
+/** Подписи редактируемых полей поста (Шаг 6.5). Порядок = код в callback (0/1/2). */
+const POST_FIELDS: readonly EditablePostField[] = ["title", "text", "cta"];
+const POST_FIELD_RU: Record<EditablePostField, string> = {
+  title: "Заголовок",
+  text: "Текст",
+  cta: "Призыв (CTA)",
 };
 
 /** Экран-заглушка, когда активного канала нет (не запущен сид). */
@@ -456,5 +509,156 @@ export function renderEditAnswerPrompt(
       `✏️ Изменить ответ #${String(answerIdx + 1)} для «${word}»\n\n` +
       `Текущий текст:\n${current}\n\nПришли новый текст одним сообщением.`,
     keyboard: buildKeyboard([navRow(encodeCb("ans", wordIdx, answerIdx))]),
+  };
+}
+
+/** Поле поста по коду из callback (0/1/2 → title/text/cta) или `undefined`. */
+export function postFieldByCode(code: number): EditablePostField | undefined {
+  return POST_FIELDS[code];
+}
+
+/** Экран — контент-план: список недель с числом постов (Шаг 6.5). */
+export async function renderPlan(deps: AdminDeps): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const weeks = await getPlanOverview(deps.prisma, channel.id);
+  const rows: Btn[][] = weeks.map((w) => [
+    {
+      label: `Неделя ${String(w.week)} · ${String(w.count)} ${pluralPosts(w.count)} ›`,
+      data: encodeCb("pw", w.week),
+    },
+  ]);
+  rows.push(navRow());
+
+  const header =
+    weeks.length === 0
+      ? "🗂 Контент-план\n\nПостов пока нет. Залей план: `npm run seed`."
+      : `🗂 Контент-план (${String(weeks.length)} нед.)\n\nВыбери неделю — посмотреть и отредактировать посты.`;
+  return { text: header, keyboard: buildKeyboard(rows) };
+}
+
+/** Экран — посты выбранной недели по порядку день→время (Шаг 6.5). */
+export async function renderPlanWeek(
+  deps: AdminDeps,
+  week: number,
+  page: number,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const posts = await getPostsForWeek(deps.prisma, channel.id, week);
+  if (posts.length === 0) {
+    return {
+      text: `🗂 Неделя ${String(week)}\n\nВ этой неделе нет постов.`,
+      keyboard: buildKeyboard([navRow(encodeCb("plan"))]),
+    };
+  }
+  const pg = paginate(posts, page, PAGE_POSTS);
+
+  const rows: Btn[][] = pg.slice.map((p) => [
+    {
+      label: `${DAY_SHORT_RU[p.day] ?? p.day} ${p.time} · ${preview(p.title, 24)}`,
+      data: encodeCb("pp", p.externalId),
+    },
+  ]);
+  const pager = pageRow(pg.page, pg.hasPrev, pg.hasNext, (pp) =>
+    encodeCb("pw", week, pp),
+  );
+  if (pager.length > 0) {
+    rows.push(pager);
+  }
+  rows.push(navRow(encodeCb("plan")));
+
+  return {
+    text: `🗂 Неделя ${String(week)} — ${String(posts.length)} ${pluralPosts(posts.length)}\n\nНажми пост, чтобы открыть и отредактировать.`,
+    keyboard: buildKeyboard(rows),
+  };
+}
+
+/** Экран — один пост: полный текст полей + кнопки правки/удаления (Шаг 6.5). */
+export async function renderPlanPost(
+  deps: AdminDeps,
+  externalId: number,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const post = await getPostDetail(deps.prisma, channel.id, externalId);
+  if (post === null) {
+    return {
+      text: "Пост не найден — возможно, он был удалён.",
+      keyboard: buildKeyboard([navRow(encodeCb("plan"))]),
+    };
+  }
+
+  const lines = [
+    `🗂 Пост #${String(post.externalId)}`,
+    `Неделя ${String(post.week)}, ${DAY_RU[post.day] ?? post.day}, ${post.time}`,
+    `Тип: ${INTERACTIVE_RU[post.interactiveType] ?? post.interactiveType}`,
+    "",
+    `📌 Заголовок:\n${post.title}`,
+    "",
+    `📝 Текст:\n${clip(post.text, 2500)}`,
+    "",
+    `📣 Призыв:\n${post.cta}`,
+  ];
+  const rows: Btn[][] = [
+    [{ label: "✏️ Заголовок", data: encodeCb("ped", 0, externalId) }],
+    [{ label: "✏️ Текст", data: encodeCb("ped", 1, externalId) }],
+    [{ label: "✏️ Призыв (CTA)", data: encodeCb("ped", 2, externalId) }],
+    [{ label: "🗑 Удалить пост", data: encodeCb("pdc", externalId) }],
+    navRow(encodeCb("pw", post.week)),
+  ];
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/** Экран-приглашение: жду новый текст редактируемого поля поста (Шаг 6.5). */
+export function renderEditPostFieldPrompt(
+  field: EditablePostField,
+  externalId: number,
+  current: string,
+): Screen {
+  return {
+    text:
+      `✏️ Изменить «${POST_FIELD_RU[field]}» поста #${String(externalId)}\n\n` +
+      `Текущее значение:\n${current}\n\nПришли новый текст одним сообщением.`,
+    keyboard: buildKeyboard([navRow(encodeCb("pp", externalId))]),
+  };
+}
+
+/** Экран — подтверждение удаления поста из контент-плана (Шаг 6.5). */
+export async function renderDeletePostConfirm(
+  deps: AdminDeps,
+  externalId: number,
+): Promise<Screen> {
+  const channel = await getActiveChannel(deps.prisma);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const post = await getPostDetail(deps.prisma, channel.id, externalId);
+  if (post === null) {
+    return {
+      text: "Пост не найден — возможно, он был удалён.",
+      keyboard: buildKeyboard([navRow(encodeCb("plan"))]),
+    };
+  }
+  const lines = [
+    `🗑 Удалить пост #${String(post.externalId)}?`,
+    "",
+    `Неделя ${String(post.week)}, ${DAY_RU[post.day] ?? post.day}, ${post.time}`,
+    `«${preview(post.title, 60)}»`,
+    "",
+    "Пост исчезнет из плана. При следующем `npm run seed` он восстановится.",
+  ];
+  return {
+    text: lines.join("\n"),
+    keyboard: buildKeyboard([
+      [{ label: "🗑 Да, удалить", data: encodeCb("pdel", externalId) }],
+      [{ label: "◀ Отмена", data: encodeCb("pp", externalId) }],
+    ]),
   };
 }

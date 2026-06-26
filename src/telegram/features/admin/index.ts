@@ -3,6 +3,7 @@ import { decodeCb, intArg } from "../../../core/menu/callbackData.js";
 import {
   validateAnswer,
   validateChannelTarget,
+  validatePostField,
   validateTime,
   validateTriggerWord,
 } from "../../../core/menu/validation.js";
@@ -31,6 +32,11 @@ import {
   removeText,
   updateText,
 } from "../../../db/repositories/textPoolRepository.js";
+import {
+  deletePost,
+  getPostDetail,
+  updatePostField,
+} from "../../../db/repositories/postRepository.js";
 import { toggleBooleanSetting } from "../../../db/repositories/settingRepository.js";
 import {
   renderAddAnswerPrompt,
@@ -46,6 +52,12 @@ import {
   renderStatus,
   renderTrigger,
   renderTriggers,
+  renderPlan,
+  renderPlanWeek,
+  renderPlanPost,
+  renderEditPostFieldPrompt,
+  renderDeletePostConfirm,
+  postFieldByCode,
 } from "./screens.js";
 import type { AdminDeps, PendingInput, Screen } from "./types.js";
 
@@ -380,6 +392,92 @@ async function routeCallback(
       return;
     }
 
+    case "plan":
+      await editScreen(ctx, await renderPlan(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "pw": {
+      const week = intArg(args, 0);
+      if (week === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await editScreen(ctx, await renderPlanWeek(deps, week, intArg(args, 1) ?? 0));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "pp": {
+      const externalId = intArg(args, 0);
+      if (externalId === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await editScreen(ctx, await renderPlanPost(deps, externalId));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "ped": {
+      const field = postFieldByCode(intArg(args, 0) ?? -1);
+      const externalId = intArg(args, 1);
+      if (field === undefined || externalId === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const channel = await getActiveChannel(deps.prisma);
+      const post =
+        channel === null
+          ? null
+          : await getPostDetail(deps.prisma, channel.id, externalId);
+      if (post === null) {
+        await editScreen(ctx, await renderPlanPost(deps, externalId));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      pending.set(adminId, { kind: "editPostField", field, externalId });
+      await editScreen(ctx, renderEditPostFieldPrompt(field, externalId, post[field]));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "pdc": {
+      const externalId = intArg(args, 0);
+      if (externalId === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await editScreen(ctx, await renderDeletePostConfirm(deps, externalId));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "pdel": {
+      const externalId = intArg(args, 0);
+      if (externalId === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const channel = await getActiveChannel(deps.prisma);
+      let week: number | null = null;
+      if (channel !== null) {
+        const post = await getPostDetail(deps.prisma, channel.id, externalId);
+        week = post?.week ?? null;
+        await deletePost(deps.prisma, channel.id, externalId);
+        deps.logger.info(
+          { channelId: channel.id, externalId },
+          "пост контент-плана удалён",
+        );
+      }
+      await editScreen(
+        ctx,
+        week === null ? await renderPlan(deps) : await renderPlanWeek(deps, week, 0),
+      );
+      await ctx.answerCallbackQuery({ text: "Пост удалён" });
+      return;
+    }
+
     case "soon":
       await ctx.answerCallbackQuery({ text: "Скоро 🛠" });
       return;
@@ -477,6 +575,27 @@ async function handleInput(
         `✅ Канал публикации: ${result.value}\nУбедись, что бот — админ этого канала.`,
       );
       await sendScreen(ctx, await renderAutopost(deps));
+      return;
+    }
+
+    case "editPostField": {
+      const result = validatePostField(text, state.field);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+        return; // остаёмся в режиме ввода
+      }
+      const ok = await updatePostField(
+        deps.prisma,
+        channel.id,
+        state.externalId,
+        state.field,
+        result.value,
+      );
+      pending.delete(deps.adminId);
+      await ctx.reply(
+        ok ? "✅ Пост обновлён." : "⚠️ Пост не найден (возможно, удалён).",
+      );
+      await sendScreen(ctx, await renderPlanPost(deps, state.externalId));
       return;
     }
   }

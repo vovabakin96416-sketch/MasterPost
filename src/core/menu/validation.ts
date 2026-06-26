@@ -34,6 +34,45 @@ export function validateAnswer(input: string): ValidationResult {
   return { ok: true, value: trimmed };
 }
 
+/** Лимиты длины полей поста контент-плана (Шаг 6.5). */
+export const POST_FIELD_LIMITS = {
+  title: 200,
+  cta: 300,
+  text: MAX_ANSWER_LENGTH,
+} as const;
+
+/** Поле поста, редактируемое из меню (Шаг 6.5). */
+export type PostField = keyof typeof POST_FIELD_LIMITS;
+
+/** Подпись поля для текста ошибки/приглашения. */
+const POST_FIELD_LABEL: Record<PostField, string> = {
+  title: "заголовок",
+  cta: "призыв",
+  text: "текст",
+};
+
+/**
+ * Проверяет новый текст поля поста (Шаг 6.5): непустой и в пределах лимита поля.
+ * Возвращает обрезанное по краям значение. ЧИСТАЯ логика — лимиты общие для любого канала.
+ */
+export function validatePostField(input: string, field: PostField): ValidationResult {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return {
+      ok: false,
+      error: `Пустой ${POST_FIELD_LABEL[field]} — пришлите непустой текст.`,
+    };
+  }
+  const limit = POST_FIELD_LIMITS[field];
+  if (trimmed.length > limit) {
+    return {
+      ok: false,
+      error: `Слишком длинно (${String(trimmed.length)} символов, лимит ${String(limit)}).`,
+    };
+  }
+  return { ok: true, value: trimmed };
+}
+
 /**
  * Проверяет новое слово-триггер: непустое после нормализации и не дублирует уже
  * существующее (сравнение через `normalizeTriggerText`, как в матчинге Шага 2).
