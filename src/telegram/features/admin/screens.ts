@@ -107,7 +107,7 @@ export const MAIN_SECTIONS: readonly Section[] = [
   { label: "📅 Автопостинг", data: encodeCb("auto") },
   { label: "📋 Одобрение постов", data: encodeCb("appr") },
   { label: "🗂 Контент-план", data: encodeCb("plan") },
-  { label: "🔮 Кнопки-предсказания", data: encodeCb("bpl") },
+  { label: "🔘 Кнопки под постами", data: encodeCb("bpl") },
   { label: "⏳ AI-ответы (скоро)", data: encodeCb("soon") },
 ];
 
@@ -137,7 +137,7 @@ const DAY_SHORT_RU: Record<string, string> = {
 const INTERACTIVE_RU: Record<string, string> = {
   keyword_trigger: "слово-триггер",
   button_choice: "кнопки-варианты",
-  button_prediction: "кнопка-предсказание",
+  button_prediction: "кнопка с ответом в личку",
   vote_123: "голосование",
 };
 
@@ -472,7 +472,6 @@ export async function renderApproval(deps: AdminDeps): Promise<Screen> {
         data: encodeCb("aptgl"),
       },
     ],
-    [{ label: "👀 Прислать превью (тест)", data: encodeCb("appv") }],
     navRow(),
   ];
 
@@ -613,6 +612,7 @@ export async function renderPlanPost(
     [{ label: "✏️ Заголовок", data: encodeCb("ped", 0, externalId) }],
     [{ label: "✏️ Текст", data: encodeCb("ped", 1, externalId) }],
     [{ label: "✏️ Призыв (CTA)", data: encodeCb("ped", 2, externalId) }],
+    [{ label: "👀 Прислать на тест", data: encodeCb("ptest", externalId) }],
     [{ label: "🗑 Удалить пост", data: encodeCb("pdc", externalId) }],
     navRow(encodeCb("pw", post.week)),
   ];
@@ -699,7 +699,7 @@ export async function renderButtonPools(deps: AdminDeps): Promise<Screen> {
     const warn = poolHealth(pool.count, pool.updatedAt, now).stale ? " ⚠️" : "";
     return [
       {
-        label: `🔮 ${name} · ${String(pool.count)} ${pluralAnswers(pool.count)}${spare}${warn} ›`,
+        label: `🔘 ${name} · ${String(pool.count)} ${pluralAnswers(pool.count)}${spare}${warn} ›`,
         data: encodeCb("bpo", globalIdx, 0),
       },
     ];
@@ -708,8 +708,8 @@ export async function renderButtonPools(deps: AdminDeps): Promise<Screen> {
 
   const header =
     pools.length === 0
-      ? "🔮 Кнопки-предсказания\n\nПулов пока нет. Залей контент: `npm run seed`."
-      : `🔮 Кнопки-предсказания (${String(pools.length)})\n\nПулы ответов для кнопок под постами. Нажми кнопку «предсказание» под постом — бот шлёт случайный ответ из пула в личку. «Про запас» = пул пока не привязан ни к одной кнопке.`;
+      ? "🔘 Кнопки под постами\n\nПулов пока нет. Залей контент: `npm run seed`."
+      : `🔘 Кнопки под постами (${String(pools.length)})\n\nПулы ответов для кнопок под постами. Нажми кнопку под постом — бот шлёт случайный ответ из пула в личку. «Про запас» = пул пока не привязан ни к одной кнопке.`;
   return { text: header, keyboard: buildKeyboard(rows) };
 }
 
@@ -762,7 +762,7 @@ export async function renderButtonPool(
     : "\n💤 Пул пока не подключён к кнопке поста — можно наполнить заранее.";
   let header: string;
   if (texts.length === 0) {
-    header = `🔮 «${name}»\n\nОтветов пока нет. Добавь первый — и кнопка начнёт отвечать им в личку.${spareNote}`;
+    header = `🔘 «${name}»\n\nОтветов пока нет. Добавь первый — и кнопка начнёт отвечать им в личку.${spareNote}`;
   } else {
     const now = new Date();
     const health = poolHealth(texts.length, detail?.updatedAt ?? null, now);
@@ -774,7 +774,7 @@ export async function renderButtonPool(
         ? "\n⚠️ Мало ответов — добавь ещё, чтобы не приедались."
         : "\n⚠️ Давно не обновлялся — освежи ответы."
       : "";
-    header = `🔮 «${name}» — ${String(texts.length)} ${pluralAnswers(texts.length)}${ageLine}${hint}${spareNote}\n\nНажми ответ, чтобы изменить или удалить.`;
+    header = `🔘 «${name}» — ${String(texts.length)} ${pluralAnswers(texts.length)}${ageLine}${hint}${spareNote}\n\nНажми ответ, чтобы изменить или удалить.`;
   }
   return { text: header, keyboard: buildKeyboard(rows) };
 }

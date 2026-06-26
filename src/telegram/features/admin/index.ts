@@ -14,7 +14,7 @@ import {
 } from "../../../services/autopostSettings.js";
 import {
   publishNow,
-  requestApprovalForToday,
+  requestApprovalForPost,
   type PostingDeps,
   type PreviewNowResult,
   type PublishNowResult,
@@ -260,7 +260,12 @@ async function routeCallback(
       return;
     }
 
-    case "appv": {
+    case "ptest": {
+      const externalId = intArg(args, 0);
+      if (externalId === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
       const postingDeps: PostingDeps = {
         prisma: deps.prisma,
         logger: deps.logger,
@@ -268,7 +273,7 @@ async function routeCallback(
         adminId: deps.adminId,
         pexelsApiKey: deps.pexelsApiKey,
       };
-      const result = await requestApprovalForToday(postingDeps);
+      const result = await requestApprovalForPost(postingDeps, externalId);
       await ctx.answerCallbackQuery({
         text: previewResultText(result),
         show_alert: !result.ok,
@@ -757,7 +762,7 @@ function previewResultText(result: PreviewNowResult): string {
     case "no_channel":
       return "Канал не найден. Запусти сид: npm run seed.";
     case "no_post":
-      return "На сегодня нет постов в контент-плане.";
+      return "Пост не найден (возможно, удалён).";
   }
 }
 

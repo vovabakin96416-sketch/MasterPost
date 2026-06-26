@@ -4,6 +4,7 @@ import type { PrismaClient } from "../db/client.js";
 import {
   getPostInteractive,
   getPostsForDay,
+  getPostToPublish,
   type PostToPublish,
 } from "../db/repositories/postRepository.js";
 import { buildPostKeyboard } from "./postButtons.js";
@@ -390,22 +391,22 @@ export type PreviewNowResult =
   | { ok: false; reason: "no_channel" | "no_post" };
 
 /**
- * Шлёт админу превью на одобрение для ПЕРВОГО поста сегодня (кнопка «👀 Прислать
- * превью (тест)» в меню) — порт `cmd_preview`. Не зависит от тумблера одобрения.
+ * Шлёт админу превью на одобрение для КОНКРЕТНОГО поста контент-плана (кнопка
+ * «👀 Прислать на тест» в экране поста). Не зависит от тумблера одобрения.
+ * `no_post` = пост не найден (возможно, удалён).
  */
-export async function requestApprovalForToday(
+export async function requestApprovalForPost(
   deps: PostingDeps,
+  externalId: number,
 ): Promise<PreviewNowResult> {
   const channel = await getPostingChannel(deps.prisma);
   if (channel === null) {
     return { ok: false, reason: "no_channel" };
   }
-  const { today, week } = resolveNow(channel);
-  const posts = await getPostsForDay(deps.prisma, channel.id, week, today.weekday);
-  const first = posts[0];
-  if (first === undefined) {
+  const post = await getPostToPublish(deps.prisma, channel.id, externalId);
+  if (post === null) {
     return { ok: false, reason: "no_post" };
   }
-  await requestApproval(deps, channel.id, channel.chatId, first);
+  await requestApproval(deps, channel.id, channel.chatId, post);
   return { ok: true };
 }

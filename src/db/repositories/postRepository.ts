@@ -81,6 +81,40 @@ export async function getPostsForDay(
 }
 
 /**
+ * Один пост канала по (channelId, externalId), готовый к публикации — для отправки
+ * конкретного поста на тест из экрана поста («👀 Прислать на тест»). Тот же `select`,
+ * что у `getPostsForDay`, но точечно по уникальной паре. `null`, если поста нет.
+ */
+export async function getPostToPublish(
+  prisma: PrismaClient,
+  channelId: string,
+  externalId: number,
+): Promise<PostToPublish | null> {
+  const row = await prisma.post.findUnique({
+    where: { channelId_externalId: { channelId, externalId } },
+    select: {
+      externalId: true,
+      title: true,
+      text: true,
+      cta: true,
+      pexelsQuery: true,
+      photoPath: true,
+      interactiveType: true,
+      choices: true,
+      button: true,
+    },
+  });
+  if (row === null) {
+    return null;
+  }
+  return {
+    ...row,
+    choices: parseChoices(row.choices),
+    button: parseButton(row.button),
+  };
+}
+
+/**
  * Поля интерактива поста по (channelId, externalId) — для построения кнопок при
  * публикации ОДОБРЕННОГО поста (у снимка `PendingPost` этих полей нет, берём из
  * исходного `Post`). `null`, если поста нет.
