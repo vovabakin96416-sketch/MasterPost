@@ -4,8 +4,10 @@ import {
   normalizeTriggerText,
 } from "../src/core/triggers/matchTrigger";
 import {
+  ANON_PREFIX,
   answerKey,
   pickPredictionNoRepeat,
+  renderAnonymous,
   renderTemplate,
 } from "../src/core/triggers/pickPrediction";
 import { isOnCooldown, nextExpiry } from "../src/core/triggers/cooldown";
@@ -64,6 +66,26 @@ describe("renderTemplate / pickPredictionNoRepeat", () => {
     const pool = ["{name}: A", "{name}: B", "{name}: C"];
     expect(pickPredictionNoRepeat(pool, [], "@anna", () => 0)?.text).toBe("@anna: A");
     expect(pickPredictionNoRepeat(pool, [], "@anna", () => 0.99)?.text).toBe("@anna: C");
+  });
+
+  it("renderAnonymous: срез обращения, префикс и заглавная буква тела", () => {
+    expect(renderAnonymous("🎴 {name}, тяну твою карту...\n\n👑 Изобилие.")).toBe(
+      `${ANON_PREFIX}\n\n🎴 Тяну твою карту...\n\n👑 Изобилие.`,
+    );
+  });
+
+  it("renderAnonymous подчищает остаточные {name} в теле", () => {
+    expect(renderAnonymous("☕ {name}, чашка для {name} готова")).toBe(
+      `${ANON_PREFIX}\n\n☕ Чашка для  готова`,
+    );
+  });
+
+  it("pickPredictionNoRepeat уважает переданный render (аноним)", () => {
+    const pool = ["🎴 {name}, тяну твою карту..."];
+    const pick = pickPredictionNoRepeat(pool, [], "", () => 0, (t) =>
+      renderAnonymous(t),
+    );
+    expect(pick?.text).toBe(`${ANON_PREFIX}\n\n🎴 Тяну твою карту...`);
   });
 
   it("пустой пул → null", () => {

@@ -1,5 +1,9 @@
 import { matchTrigger } from "../../../core/triggers/matchTrigger.js";
-import { pickPredictionNoRepeat } from "../../../core/triggers/pickPrediction.js";
+import {
+  pickPredictionNoRepeat,
+  renderAnonymous,
+  renderTemplate,
+} from "../../../core/triggers/pickPrediction.js";
 import { isOnCooldown, nextExpiry } from "../../../core/triggers/cooldown.js";
 import { getActiveChannel } from "../../../db/repositories/channelRepository.js";
 import { getTextPool } from "../../../db/repositories/textPoolRepository.js";
@@ -86,9 +90,21 @@ export function createTriggerStage(): CommentStage {
         return "handled";
       }
 
+      // Аноним (`GroupAnonymousBot`, is_bot) — комментарий от имени канала/группы:
+      // не обращаемся по @username бота, а даём нейтральный префикс «Лови послание».
+      const anon = from.is_bot === true;
       const name = from.username ? `@${from.username}` : from.first_name;
+      const render = anon
+        ? (t: string): string => renderAnonymous(t)
+        : (t: string, n: string): string => renderTemplate(t, { name: n });
       // Анти-повтор «колода»: память недавно показанных ответов — в строке кулдауна.
-      const pick = pickPredictionNoRepeat(pool, cooldown?.recent ?? [], name);
+      const pick = pickPredictionNoRepeat(
+        pool,
+        cooldown?.recent ?? [],
+        name,
+        Math.random,
+        render,
+      );
       if (pick === null) {
         return "pass";
       }

@@ -11,6 +11,24 @@ export function renderTemplate(template: string, vars: { name: string }): string
   return template.split("{name}").join(vars.name);
 }
 
+/** Префикс для ответа анонимному отправителю (комментарий от имени канала/группы). */
+export const ANON_PREFIX = "❤️ Лови послание:";
+
+/**
+ * Рендер для анонима (`GroupAnonymousBot`): убираем обращение по имени и даём
+ * нейтральный префикс. Срезаем ведущее `"{name}, "` (и подчищаем любые остаточные
+ * `{name}`), первую букву тела делаем заглавной, сверху — `ANON_PREFIX`.
+ * Память анти-повтора считается по сырому шаблону, поэтому от рендера не зависит.
+ */
+export function renderAnonymous(template: string): string {
+  const body = template
+    .replace("{name}, ", "")
+    .split("{name}")
+    .join("")
+    .replace(/^(\S+\s+)(\p{Ll})/u, (_m, lead: string, ch: string) => lead + ch.toUpperCase());
+  return `${ANON_PREFIX}\n\n${body}`;
+}
+
 /**
  * Стабильный короткий ключ ответа (djb2 → base36). По СОДЕРЖИМОМУ, а не индексу:
  * переживает правки/удаление/перестановку ответов в админке, поэтому «память»
@@ -49,6 +67,8 @@ export function pickPredictionNoRepeat(
   recentKeys: readonly string[],
   name: string,
   rng: () => number = Math.random,
+  render: (template: string, name: string) => string = (t, n) =>
+    renderTemplate(t, { name: n }),
 ): NoRepeatPick | null {
   if (pool.length === 0) {
     return null;
@@ -78,5 +98,5 @@ export function pickPredictionNoRepeat(
   const keep = Math.max(0, pool.length - 1);
   const nextRecent = [...recentSet, chosen.key].slice(-keep);
 
-  return { text: renderTemplate(chosen.text, { name }), recentKeys: nextRecent };
+  return { text: render(chosen.text, name), recentKeys: nextRecent };
 }
