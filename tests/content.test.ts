@@ -67,18 +67,32 @@ describe("content.json (посты канала №1)", () => {
 
 describe("texts.json (пулы предсказаний канала №1)", () => {
   const expectedKeys = [
+    // Слова-триггеры (ключ пула = слово; да/нет → «оракул», см. triggerStage).
     "карта",
     "кофе",
     "руна",
+    "знак",
+    "любовь",
+    "деньги",
+    "свет",
+    "оракул",
+    // Пулы кнопок (button.type в постах).
     "button_love",
     "button_money",
     "button_cards",
   ];
 
-  it("содержит ровно 6 ожидаемых ключей", () => {
+  it("содержит ровно 11 ожидаемых ключей", () => {
     const pools = parseTextPools(rawTexts);
     const keys = pools.map((p) => p.key).sort();
     expect(keys).toEqual([...expectedKeys].sort());
+  });
+
+  it("в каждом пуле ровно 20 текстов", () => {
+    const pools = parseTextPools(rawTexts);
+    for (const pool of pools) {
+      expect(pool.texts.length, `пул ${pool.key}`).toBe(20);
+    }
   });
 
   it("каждый пул — непустой массив строк", () => {

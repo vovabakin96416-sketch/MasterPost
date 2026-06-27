@@ -14,6 +14,16 @@ import type { CommentStage } from "./types.js";
 const COOLDOWN_HOURS = 24;
 
 /**
+ * Алиасы слов-триггеров на ключ пула. «да»/«нет» — это оракул: оба слова тянут
+ * из общего пула «оракул» и делят один кулдаун (как `oracle` в Python-боте).
+ * Для остальных слов ключ пула = само слово (карта/кофе/руна/…).
+ */
+const TRIGGER_ALIASES: Record<string, string> = {
+  да: "оракул",
+  нет: "оракул",
+};
+
+/**
  * Реальная логика триггеров в комментах (порт `handle_message` Python-бота).
  *
  * Поток: резолв активного канала → проверка `comments_enabled` → совпадение
@@ -55,8 +65,10 @@ export function createTriggerStage(): CommentStage {
         return "pass";
       }
 
-      // Ключ пула = совпавшее слово-триггер (карта/кофе/руна для канала №1).
-      const pool = await getTextPool(deps.prisma, channel.id, matched);
+      // Ключ пула = совпавшее слово, либо его алиас (да/нет → «оракул»). Один и
+      // тот же ключ служит и пулом текстов, и ключом кулдауна.
+      const triggerKey = TRIGGER_ALIASES[matched] ?? matched;
+      const pool = await getTextPool(deps.prisma, channel.id, triggerKey);
       if (pool === null || pool.length === 0) {
         return "pass";
       }
@@ -67,7 +79,7 @@ export function createTriggerStage(): CommentStage {
         deps.prisma,
         channel.id,
         userId,
-        matched,
+        triggerKey,
       );
       if (cooldown !== null && isOnCooldown(cooldown.expiresAt, now)) {
         // Слово распознано, но на кулдауне — молчим и дальше не пускаем.
@@ -86,7 +98,7 @@ export function createTriggerStage(): CommentStage {
         deps.prisma,
         channel.id,
         userId,
-        matched,
+        triggerKey,
         nextExpiry(now, COOLDOWN_HOURS),
         pick.recentKeys,
       );
@@ -95,7 +107,7 @@ export function createTriggerStage(): CommentStage {
         reply_parameters: { message_id: message.message_id },
       });
       deps.logger.info(
-        { channelId: channel.id, userId, trigger: matched },
+        { channelId: channel.id, userId, trigger: matched, pool: triggerKey },
         "ответ на триггер",
       );
       return "handled";
