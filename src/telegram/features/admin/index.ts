@@ -1,4 +1,4 @@
-import { Composer, type Context, GrammyError } from "grammy";
+import { Composer, type Context, GrammyError, Keyboard } from "grammy";
 import { decodeCb, intArg } from "../../../core/menu/callbackData.js";
 import {
   validateAnswer,
@@ -72,6 +72,17 @@ import {
 } from "./screens.js";
 import type { AdminDeps, PendingInput, Screen } from "./types.js";
 
+/** Текст постоянной кнопки, открывающей меню одним нажатием (вместо ввода /menu). */
+export const MENU_BUTTON_TEXT = "📋 Меню";
+
+/**
+ * Постоянная reply-клавиатура с одной кнопкой «📋 Меню» — висит под полем ввода у
+ * админа; нажатие открывает то же, что `/menu`. Ставится один раз (на /start) и держится.
+ */
+export function buildMenuReplyKeyboard(): Keyboard {
+  return new Keyboard().text(MENU_BUTTON_TEXT).resized().persistent();
+}
+
 /**
  * Композер меню админа (Шаг 3). Изолированный модуль: правка меню не задевает
  * триггеры/комментарии. Порт `cmd_menu` / `button_handler` Python-бота.
@@ -113,6 +124,12 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
 
   // Текстовый ввод в личке — только когда ждём его (иначе отдаём дальше).
   admin.chatType("private").on("message:text", async (ctx, next) => {
+    // Нажатие постоянной кнопки «📋 Меню» = открыть меню (как /menu), отменив ввод.
+    if (ctx.message.text === MENU_BUTTON_TEXT) {
+      pending.delete(adminId);
+      await sendScreen(ctx, renderMain());
+      return;
+    }
     const state = pending.get(adminId);
     if (state === undefined) {
       await next(); // ввод не ждём — пусть его обработает одобрение/комменты

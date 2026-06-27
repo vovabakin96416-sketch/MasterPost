@@ -1,6 +1,9 @@
 import { Bot } from "grammy";
 import { createCommentsComposer } from "./features/comments/index.js";
-import { createAdminComposer } from "./features/admin/index.js";
+import {
+  buildMenuReplyKeyboard,
+  createAdminComposer,
+} from "./features/admin/index.js";
 import { createApprovalComposer } from "./features/approval/index.js";
 import { createPostButtonsComposer } from "./features/postButtons/index.js";
 import type { CommentDeps } from "./features/comments/types.js";
@@ -24,6 +27,14 @@ export function createBot(token: string, deps: BotDeps): Bot {
   const bot = new Bot(token);
 
   bot.command("start", async (ctx) => {
+    // Админу сразу даём постоянную кнопку «📋 Меню» под полем ввода (один раз — держится).
+    if (ctx.from?.id === deps.adminId) {
+      await ctx.reply(
+        "Привет! Я MasterPost — бот-управитель каналов.\nВнизу кнопка «📋 Меню» — нажми, чтобы открыть управление.",
+        { reply_markup: buildMenuReplyKeyboard() },
+      );
+      return;
+    }
     await ctx.reply(
       "Привет! Я MasterPost — бот-управитель каналов. Каркас работает ✅",
     );
