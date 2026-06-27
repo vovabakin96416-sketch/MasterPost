@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildWeeklyReport,
+  messageToMetric,
   summariseWeekly,
   type PostMetricInput,
+  type RawMessageLike,
 } from "../src/core/analytics/weeklyReport";
 
 const TZ = "Europe/Moscow";
@@ -108,5 +110,65 @@ describe("buildWeeklyReport", () => {
       TZ,
     );
     expect(text.indexOf("Ранний")).toBeLessThan(text.indexOf("Поздний"));
+  });
+});
+
+function raw(over: Partial<RawMessageLike> = {}): RawMessageLike {
+  return {
+    id: 10,
+    date: 1_700_000_000, // unix-секунды
+    message: "Подпись",
+    media: undefined,
+    views: 100,
+    reactions: undefined,
+    replies: undefined,
+    ...over,
+  };
+}
+
+describe("messageToMetric", () => {
+  it("фото без подписи (message=undefined) → не падает, превью пустое", () => {
+    // Регрессия: раньше undefined.slice → «Cannot read properties of undefined».
+    const m = messageToMetric(raw({ message: undefined, media: { photo: true } }));
+    expect(m).not.toBeNull();
+    expect(m?.preview).toBe("");
+    expect(m?.views).toBe(100);
+  });
+
+  it("служебное сообщение (без текста и медиа) → null", () => {
+    expect(messageToMetric(raw({ message: undefined, media: undefined }))).toBeNull();
+    expect(messageToMetric(raw({ message: "", media: undefined }))).toBeNull();
+  });
+
+  it("текстовый пост → метрики и дата из unix-секунд", () => {
+    const m = messageToMetric(
+      raw({
+        id: 42,
+        date: 1_700_000_000,
+        message: "Карта дня",
+        views: 250,
+        replies: { replies: 7 },
+      }),
+    );
+    expect(m).toEqual({
+      messageId: 42,
+      views: 250,
+      reactions: 0,
+      replies: 7,
+      preview: "Карта дня",
+      postedAt: new Date(1_700_000_000 * 1000),
+    });
+  });
+
+  it("суммирует количество по всем реакциям", () => {
+    const m = messageToMetric(
+      raw({ reactions: { results: [{ count: 3 }, { count: 4 }] } }),
+    );
+    expect(m?.reactions).toBe(7);
+  });
+
+  it("длинное превью режется до 80 символов", () => {
+    const m = messageToMetric(raw({ message: "я".repeat(200) }));
+    expect(m?.preview.length).toBe(80);
   });
 });

@@ -1,6 +1,9 @@
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
-import type { PostMetricInput } from "../../core/analytics/weeklyReport.js";
+import {
+  messageToMetric,
+  type PostMetricInput,
+} from "../../core/analytics/weeklyReport.js";
 
 /**
  * MTProto-клиент (Шаг 7b) — единственный модуль, который импортирует тяжёлый GramJS.
@@ -16,8 +19,6 @@ const CONNECTION_RETRIES = 5;
 
 /** Сколько последних сообщений канала просматриваем (как `limit=30` в Python). */
 const RECENT_MESSAGES_LIMIT = 30;
-/** До скольких символов режем превью текста поста (отчёт обрежет ещё короче). */
-const PREVIEW_LENGTH = 80;
 
 /** Колбэки интерактивного входа — инъекция, чтобы readline жил в скрипте, а не тут. */
 export interface LoginPrompts {
@@ -25,6 +26,14 @@ export interface LoginPrompts {
   phone: () => Promise<string>;
   /** Код подтверждения из Telegram. */
   code: () => Promise<string>;
+  /** Пароль двухфакторной защиты (если включена). */
+  password: () => Promise<string>;
+}
+
+/** Колбэки QR-входа — рендер QR и (если включён) пароль 2FA живут в скрипте. */
+export interface QrLoginPrompts {
+  /** Показать пользователю deeplink `tg://login?token=…` (скрипт рисует его как QR). */
+  onQrUrl: (url: string) => Promise<void>;
   /** Пароль двухфакторной защиты (если включена). */
   password: () => Promise<string>;
 }
@@ -85,23 +94,11 @@ export async function fetchRecentPostMetrics(
     if (postedAt.getTime() < sinceMs) {
       break; // сообщения идут от новых к старым — дальше только старее
     }
-    const text = msg.message;
-    if (text === "" && msg.media === undefined) {
+    const metric = messageToMetric(msg);
+    if (metric === null) {
       continue; // служебное сообщение без контента
     }
-    const reactions =
-      msg.reactions?.results.reduce(
-        (sum: number, r) => sum + r.count,
-        0,
-      ) ?? 0;
-    metrics.push({
-      messageId: msg.id,
-      views: msg.views ?? 0,
-      reactions,
-      replies: msg.replies?.replies ?? 0,
-      preview: text.slice(0, PREVIEW_LENGTH),
-      postedAt,
-    });
+    metrics.push(metric);
   }
 
   return metrics;
@@ -131,6 +128,44 @@ export async function loginInteractive(
         console.error("Ошибка входа:", err.message);
       },
     });
+    return stringSession.save();
+  } finally {
+    await client.disconnect();
+  }
+}
+
+/**
+ * Вход по QR-коду (запасной способ, если код подтверждения из Telegram не доходит).
+ * Пользователь сканирует QR в приложении (Настройки → Устройства → Подключить устройство);
+ * вводить код руками не нужно. Возвращает строку-сессию, как `loginInteractive`.
+ *
+ * Особенности GramJS `signInUserWithQrCode`: сам НЕ подключается (сразу `invoke`) — поэтому
+ * сначала `connect()`. Токен живёт ~30 c и ротируется: колбэк `qrCode` вызывается повторно
+ * с новым токеном → скрипт перерисует QR. При включённой 2FA внутри спросит `password`.
+ */
+export async function loginInteractiveQr(
+  apiId: number,
+  apiHash: string,
+  prompts: QrLoginPrompts,
+): Promise<string> {
+  const stringSession = new StringSession("");
+  const client = new TelegramClient(stringSession, apiId, apiHash, {
+    connectionRetries: CONNECTION_RETRIES,
+  });
+  try {
+    await client.connect();
+    await client.signInUserWithQrCode(
+      { apiId, apiHash },
+      {
+        qrCode: async (qr: { token: Buffer; expires: number }) => {
+          await prompts.onQrUrl(`tg://login?token=${qr.token.toString("base64url")}`);
+        },
+        password: prompts.password,
+        onError: (err: Error) => {
+          console.error("Ошибка входа:", err.message);
+        },
+      },
+    );
     return stringSession.save();
   } finally {
     await client.disconnect();

@@ -14,7 +14,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "seed": "tsx src/seed/index.ts",
-    "gen-session": "tsx scripts/generateSession.ts"
+    "gen-session": "tsx scripts/generateSession.ts",
+    "gen-session-qr": "tsx scripts/generateSession.ts --qr"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",
@@ -30,8 +31,10 @@
     "@eslint/js": "^9.13.0",
     "@types/node": "^22.7.0",
     "@types/pg": "^8.20.0",
+    "@types/qrcode": "^1.5.6",
     "eslint": "^9.13.0",
     "prisma": "^7.8.0",
+    "qrcode": "^1.5.4",
     "tsx": "^4.19.0",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.10.0",

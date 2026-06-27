@@ -17,6 +17,52 @@ export interface PostMetricInput {
   readonly postedAt: Date;
 }
 
+/** До скольких символов режем сырое превью при чтении (отчёт обрежет ещё короче). */
+const RAW_PREVIEW_LENGTH = 80;
+
+/**
+ * Минимальная форма GramJS-сообщения, которую читает отчёт. Чистый структурный тип —
+ * НЕ тянет GramJS, поэтому маппинг можно тестировать в изоляции (принцип 7b).
+ */
+export interface RawMessageLike {
+  readonly id: number;
+  /** Unix-секунды публикации (как `msg.date` в GramJS). */
+  readonly date: number;
+  /** Текст/подпись поста; у медиа без подписи и служебных сообщений бывает undefined. */
+  readonly message?: string | undefined;
+  /** Любое медиа (фото/видео…); undefined → текстовый или служебный пост. */
+  readonly media?: unknown;
+  readonly views?: number | undefined;
+  readonly reactions?:
+    | { readonly results: readonly { readonly count: number }[] }
+    | undefined;
+  readonly replies?: { readonly replies: number } | undefined;
+}
+
+/**
+ * Маппит одно сообщение канала в плоскую метрику; `null` для служебных сообщений (нет ни
+ * текста, ни медиа — их в отчёт не берём).
+ *
+ * ⚠️ `message` бывает `undefined` (например, фото без подписи) — берём `?? ""`, иначе
+ * `.slice` падает с «Cannot read properties of undefined (reading 'slice')». Чисто и под тестами.
+ */
+export function messageToMetric(msg: RawMessageLike): PostMetricInput | null {
+  const text = msg.message ?? "";
+  if (text === "" && msg.media === undefined) {
+    return null;
+  }
+  const reactions =
+    msg.reactions?.results.reduce((sum: number, r) => sum + r.count, 0) ?? 0;
+  return {
+    messageId: msg.id,
+    views: msg.views ?? 0,
+    reactions,
+    replies: msg.replies?.replies ?? 0,
+    preview: text.slice(0, RAW_PREVIEW_LENGTH),
+    postedAt: new Date(msg.date * 1000),
+  };
+}
+
 /** Агрегированные итоги недели (числа отдельно от текста — удобно тестировать). */
 export interface WeeklySummary {
   readonly count: number;
