@@ -1,6 +1,10 @@
 import { Composer, type Context, GrammyError, Keyboard } from "grammy";
 import { decodeCb, intArg } from "../../../core/menu/callbackData.js";
 import {
+  evaluateChannelRights,
+  extractRights,
+} from "../../../core/onboarding/membership.js";
+import {
   validateAnswer,
   validateChannelTarget,
   validatePostField,
@@ -52,6 +56,7 @@ import {
   renderAddChannelPrompt,
   renderChannels,
   renderChannelDetail,
+  renderRightsCheck,
   renderAddTriggerPrompt,
   renderAnswer,
   renderEditAnswerPrompt,
@@ -265,6 +270,55 @@ async function routeCallback(
       await ctx.answerCallbackQuery({
         text: channel.isActive ? "Канал выключен" : "Канал включён",
       });
+      return;
+    }
+
+    case "chk": {
+      // Проверить права бота в канале вживую (Шаг 9a): getChatMember по цели публикации.
+      const idx = intArg(args, 0);
+      const { channels } = await resolveChannelMenu(deps);
+      const channel = idx === null ? undefined : channels[idx];
+      if (idx === null || channel === undefined) {
+        await editScreen(ctx, await renderChannels(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      if (channel.chatId === null) {
+        await ctx.answerCallbackQuery({
+          text: "Сначала добавь бота админом в канал или укажи цель публикации.",
+          show_alert: true,
+        });
+        return;
+      }
+      try {
+        const member = await ctx.api.getChatMember(channel.chatId, ctx.me.id);
+        const canPostRaw =
+          member.status === "administrator"
+            ? member.can_post_messages
+            : undefined;
+        const report = evaluateChannelRights(
+          extractRights(member.status, canPostRaw),
+        );
+        await editScreen(ctx, renderRightsCheck(report, channel.title, idx));
+        await ctx.answerCallbackQuery();
+      } catch (err) {
+        if (err instanceof GrammyError) {
+          await editScreen(
+            ctx,
+            renderRightsCheck(
+              {
+                summary: "❌ Не удалось проверить: бот не в канале или не админ.",
+                missing: ["доступ к каналу"],
+              },
+              channel.title,
+              idx,
+            ),
+          );
+          await ctx.answerCallbackQuery();
+          return;
+        }
+        throw err;
+      }
       return;
     }
 

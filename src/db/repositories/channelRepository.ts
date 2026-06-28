@@ -250,6 +250,73 @@ export async function createChannel(
   return channel.id;
 }
 
+/** Возвращает id первого канала с такой целью публикации `chatId`, или `null` (Шаг 9a). */
+export async function findChannelByChatId(
+  prisma: PrismaClient,
+  chatId: string,
+): Promise<string | null> {
+  const row = await prisma.channel.findFirst({
+    where: { chatId },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+  });
+  return row?.id ?? null;
+}
+
+/** Результат онбординга канала: id + был ли создан новый (для текста владельцу). */
+export interface OnboardingResult {
+  id: string;
+  created: boolean;
+}
+
+/**
+ * Регистрирует/линкует канал по факту добавления бота админом (Шаг 9a, онбординг).
+ * Идемпотентно: сначала ищет канал по `username` (поле `@unique` — совпадёт с сид-каналом),
+ * затем по `chatId`; если нашёл — обновляет цель публикации/идентификаторы/название и
+ * включает его; иначе создаёт новый (ниша-заглушка «—», как `createChannel`). Возвращает
+ * id и флаг `created`.
+ */
+export async function registerChannelFromOnboarding(
+  prisma: PrismaClient,
+  data: { chatId: string; username: string | null; title: string },
+): Promise<OnboardingResult> {
+  let existingId: string | null = null;
+  if (data.username !== null) {
+    const byName = await prisma.channel.findUnique({
+      where: { username: data.username },
+      select: { id: true },
+    });
+    existingId = byName?.id ?? null;
+  }
+  if (existingId === null) {
+    existingId = await findChannelByChatId(prisma, data.chatId);
+  }
+
+  if (existingId !== null) {
+    await prisma.channel.update({
+      where: { id: existingId },
+      data: {
+        chatId: data.chatId,
+        username: data.username,
+        title: data.title,
+        isActive: true,
+      },
+    });
+    return { id: existingId, created: false };
+  }
+
+  const created = await prisma.channel.create({
+    data: {
+      title: data.title,
+      username: data.username,
+      chatId: data.chatId,
+      niche: "—",
+    },
+    select: { id: true },
+  });
+  return { id: created.id, created: true };
+}
+
 /** Включает/выключает канал (Шаг 8a). Неактивный канал рантайм не ведёт. */
 export async function setChannelActive(
   prisma: PrismaClient,

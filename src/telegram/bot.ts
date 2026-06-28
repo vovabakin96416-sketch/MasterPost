@@ -6,6 +6,7 @@ import {
 } from "./features/admin/index.js";
 import { createApprovalComposer } from "./features/approval/index.js";
 import { createPostButtonsComposer } from "./features/postButtons/index.js";
+import { createOnboardingComposer } from "./features/onboarding/index.js";
 import type { CommentDeps } from "./features/comments/types.js";
 import type { MtprotoConfig } from "../services/analytics/mtprotoConfig.js";
 
@@ -53,6 +54,10 @@ export function createBot(token: string, deps: BotDeps): Bot {
 
   // Шаг 2: триггеры в комментах (карта/кофе/руна из конфига канала) + кулдаун.
   bot.use(createCommentsComposer(deps));
+
+  // Шаг 9a: онбординг канала (`my_chat_member`) — авто-регистрация при добавлении бота
+  // админом + уведомление владельца. Не пересекается с другими композерами по типу апдейта.
+  bot.use(createOnboardingComposer(deps));
 
   return bot;
 }

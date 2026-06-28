@@ -236,6 +236,7 @@ export async function renderChannelDetail(
     rows.push([{ label: "✅ Сделать текущим", data: encodeCb("chsel", idx) }]);
   }
   rows.push([{ label: "🎯 Канал публикации", data: encodeCb("chtgt", idx) }]);
+  rows.push([{ label: "🛡 Проверить права", data: encodeCb("chk", idx) }]);
   rows.push([
     {
       label: channel.isActive ? "🔇 Выключить канал" : "✅ Включить канал",
@@ -245,6 +246,29 @@ export async function renderChannelDetail(
   rows.push(navRow(encodeCb("ch")));
 
   return { text: lines.filter((l) => l !== "").join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/**
+ * Экран результата «🛡 Проверить права» (Шаг 9a): сводка прав бота в канале + назад в карточку.
+ * Чистое форматирование — вызов Telegram API (`getChatMember`) делает роутер, сюда передаёт
+ * уже готовый отчёт (`summary` + список недостающих прав).
+ */
+export function renderRightsCheck(
+  report: { summary: string; missing: string[] },
+  channelTitle: string,
+  idx: number,
+): Screen {
+  const lines = [`🛡 Права бота в канале «${channelTitle}»`, "", report.summary];
+  if (report.missing.length > 0) {
+    lines.push(
+      "",
+      "Открой настройки канала → Администраторы → бот и выдай недостающие права.",
+    );
+  }
+  return {
+    text: lines.join("\n"),
+    keyboard: buildKeyboard([navRow(encodeCb("chd", idx))]),
+  };
 }
 
 /** Экран-приглашение: жду название нового канала (Шаг 8a). */
