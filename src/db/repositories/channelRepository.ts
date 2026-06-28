@@ -1,4 +1,9 @@
 import type { PrismaClient } from "../client.js";
+import {
+  DISCUSSION_GROUP_SETTING,
+  type RoutableChannel,
+} from "../../core/comments/routeChannel.js";
+import { setJsonSetting } from "./settingRepository.js";
 
 /** Данные канала под upsert. Nullable-поля передаём явно (null, не undefined). */
 export interface ChannelSeed {
@@ -52,6 +57,54 @@ export async function getActiveChannel(
     select: { id: true, triggerWords: true },
     orderBy: { createdAt: "asc" },
   });
+}
+
+/**
+ * Все активные каналы в форме для маршрутизации комментов (Шаг 8c). Порядок
+ * `createdAt asc` совпадает с одноканальным резолвом (`getActiveChannel`/`findFirst`),
+ * поэтому `[0]` — это прежний фолбэк «первый активный канал».
+ */
+export async function getActiveRoutableChannels(
+  prisma: PrismaClient,
+): Promise<RoutableChannel[]> {
+  return prisma.channel.findMany({
+    where: { isActive: true },
+    select: { id: true, username: true, chatId: true, triggerWords: true },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+/**
+ * Возвращает id активного канала, к которому привязана группа обсуждения `groupId`
+ * (выученная связь, Шаг 8c), или `null`. Связь хранится в `Setting`
+ * (`discussion_chat_id`), фильтр по активности — через relation-условие.
+ */
+export async function findChannelIdByDiscussionGroup(
+  prisma: PrismaClient,
+  groupId: string,
+): Promise<string | null> {
+  const row = await prisma.setting.findFirst({
+    where: {
+      key: DISCUSSION_GROUP_SETTING,
+      value: { equals: groupId },
+      channel: { isActive: true },
+    },
+    select: { channelId: true },
+  });
+  return row?.channelId ?? null;
+}
+
+/**
+ * Запоминает связь «группа обсуждения → канал» (Шаг 8c). Идемпотентно: upsert
+ * `Setting(channelId, discussion_chat_id)`. Авто-обучение из триггер-стадии, когда
+ * канал коммента определён по `sender_chat` автопересланного поста.
+ */
+export async function setDiscussionGroup(
+  prisma: PrismaClient,
+  channelId: string,
+  groupId: string,
+): Promise<void> {
+  await setJsonSetting(prisma, channelId, DISCUSSION_GROUP_SETTING, groupId);
 }
 
 /** Задаёт цель публикации автопостинга (@username или числовой id). Доработка 4.1. */
