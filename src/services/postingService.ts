@@ -273,46 +273,6 @@ export async function publishDuePostsForChannel(
   await saveProgress(prisma, channel.id, { date: today.isoDate, postedTimes: posted });
 }
 
-/** Результат ручной публикации (для тоста/экрана меню). */
-export type PublishNowResult =
-  | { ok: true; week: number }
-  | { ok: false; reason: "no_channel" | "no_target" | "no_post" };
-
-/**
- * Ручная публикация из меню («Опубликовать сейчас (тест)») для ВЫБРАННОГО канала
- * (Шаг 8b). Шлёт ПЕРВЫЙ пост дня — быстрый тест. Игнорирует тумблер и дедуп (явное
- * действие админа), прогресс не трогает.
- */
-export async function publishNow(
-  deps: PostingDeps,
-  channelId: string,
-): Promise<PublishNowResult> {
-  const { prisma, logger } = deps;
-  const channel = await getPostingChannelById(prisma, channelId);
-  if (channel === null) {
-    return { ok: false, reason: "no_channel" };
-  }
-  if (channel.chatId === null) {
-    return { ok: false, reason: "no_target" };
-  }
-  const { today, week } = resolveNow(channel);
-  const posts = await getPostsForDay(prisma, channel.id, week, today.weekday);
-  const first = posts[0];
-  if (first === undefined) {
-    return { ok: false, reason: "no_post" };
-  }
-  const photo = await resolvePhoto(deps, channel.id, photoSourcesOf(first));
-  await sendPost(
-    deps,
-    channel.chatId,
-    buildPostMessage(first),
-    photo,
-    postKeyboard(channel.id, first),
-  );
-  logger.info({ channelId: channel.id, week }, "пост опубликован (вручную)");
-  return { ok: true, week };
-}
-
 // ─── Одобрение постов (Шаг 5) + фото-превью (Шаг 6a) ──────────────────────────
 
 /** Ссылка на фото по кэш-строке очереди (`PendingPost.photoUrl`): URL или file_id. */

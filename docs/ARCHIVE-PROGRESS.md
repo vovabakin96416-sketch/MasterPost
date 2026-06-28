@@ -706,3 +706,31 @@
     «✅ Канал подключён» + права, канал линкуется/появляется в `/menu → 📡 Каналы` с заполненным chatId;
     снять право «Публикация» → «🛡 Проверить права» в карточке показывает «❌ нет права»; убрать бота
     из канала → приходит предупреждение; повторное добавление того же канала НЕ плодит дублей.
+- Доработка 9a+ (UI меню): НАСТРАИВАЕМЫЙ КУЛДАУН + удаление тестовой публикации. Две правки
+  интерфейса по запросу владельца.
+  1) КУЛДАУН был захардкожен `COOLDOWN_HOURS = 24` в трёх местах (screens, triggerStage,
+     postButtons), а кнопка «⏱ Кулдаун» в Настройках — заглушка `encodeCb("soon")`. Теперь
+     кулдаун — настройка канала поверх таблицы `Setting` (тот же паттерн, что у автопостинга).
+     - `services/cooldownSettings.ts` — НОВЫЙ: `COOLDOWN_KEY="cooldown_hours"`,
+       `DEFAULT_COOLDOWN_HOURS=24`, `readCooldownHours`/`setCooldownHours` (через get/setJsonSetting).
+     - `core/menu/validation.ts` — НОВЫЙ `validateCooldownHours`: целые часы 0…168
+       (`MAX_COOLDOWN_HOURS=168`), отдельный тип `NumberValidationResult` (несёт number, не string).
+       Решение пользователя: формат — ЦЕЛЫЕ ЧАСЫ; `0` = выключить кулдаун.
+     - `0` без спец-кейсов: `nextExpiry(now,0)=now`, `isOnCooldown` строгий `>` → срабатывает
+       всегда; анти-повтор `recent` продолжает работать. `cooldown.ts` НЕ менялся.
+     - admin/`types.ts` — `PendingInput` + `{kind:"setCooldown"}`; admin/`screens.ts` — хелпер
+       `cooldownLabel` («N ч»/«выкл»), `renderSettings`/`renderStatus` читают значение, кнопка →
+       `encodeCb("cd")`, новый `renderSetCooldownPrompt`; admin/`index.ts` — case `"cd"` (вход в
+       ввод) + input-case `"setCooldown"` (валидация → `setCooldownHours` → назад в Настройки).
+     - triggerStage/postButtons: убрана локальная константа, перед `saveCooldown` читаем
+       `readCooldownHours(prisma, channelId)`.
+  2) Удалена кнопка «📤 Опубликовать сейчас (тест)» (`apub`) из экрана автопостинга: публиковала
+     первый пост дня сразу в основной канал мимо расписания/одобрения — не нужна. Снято:
+     строка-кнопка в `renderAutopost`, `case "apub"` и хелпер `publishResultText` в admin/index,
+     функция `publishNow` + тип `PublishNowResult` в `postingService.ts` (использовались только тут;
+     `getPostsForDay` и пр. остаются — нужны планировщику).
+  Тесты: `tests/schedule.test.ts` +5 кейсов `validateCooldownHours`. Проверки зелёные:
+  typecheck 0, lint 0, vitest **165/165**. Миграций/env/зависимостей НЕТ (ключ живёт в `Setting`).
+  ⏳ Ручная проверка в TG (за пользователем): Настройки → «⏱ Кулдаун» → ввод числа → значение
+    видно в Настройках и Статусе; ввод `0` → подпись «выкл», триггер срабатывает без задержки;
+    в Автопостинге больше нет кнопки «Опубликовать сейчас (тест)».

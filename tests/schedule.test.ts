@@ -4,6 +4,7 @@ import { resolveCampaignDay } from "../src/core/schedule/resolveCampaignDay.js";
 import { dueTimes, parseTime, sortTimes } from "../src/core/schedule/times.js";
 import {
   validateChannelTarget,
+  validateCooldownHours,
   validateTime,
 } from "../src/core/menu/validation.js";
 
@@ -171,5 +172,40 @@ describe("parseTime / validateTime", () => {
 
   it("validateTime возвращает ошибку на кривой ввод", () => {
     expect(validateTime("99:99").ok).toBe(false);
+  });
+});
+
+describe("validateCooldownHours", () => {
+  it("принимает целые часы в диапазоне 0…168", () => {
+    for (const [input, value] of [
+      ["0", 0],
+      ["24", 24],
+      ["168", 168],
+    ] as const) {
+      const r = validateCooldownHours(input);
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.value).toBe(value);
+      }
+    }
+  });
+
+  it("игнорирует пробелы по краям", () => {
+    const r = validateCooldownHours("  12 ");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toBe(12);
+    }
+  });
+
+  it("отклоняет нецелые, отрицательные, нечисловые и пустые значения", () => {
+    expect(validateCooldownHours("1.5").ok).toBe(false);
+    expect(validateCooldownHours("-1").ok).toBe(false);
+    expect(validateCooldownHours("abc").ok).toBe(false);
+    expect(validateCooldownHours("").ok).toBe(false);
+  });
+
+  it("отклоняет значение больше максимума", () => {
+    expect(validateCooldownHours("200").ok).toBe(false);
   });
 });

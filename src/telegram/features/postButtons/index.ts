@@ -14,6 +14,7 @@ import {
   loadCooldown,
   saveCooldown,
 } from "../../../db/repositories/cooldownRepository.js";
+import { readCooldownHours } from "../../../services/cooldownSettings.js";
 
 /**
  * Композер кнопок НА ПОСТАХ (Шаг 6b). Изолированный модуль: ловит только наши
@@ -28,9 +29,6 @@ export interface PostButtonsDeps {
   prisma: PrismaClient;
   logger: Logger;
 }
-
-/** Кулдаун на (канал, пользователь, тип кнопки), часов. Как для слов-триггеров. */
-const COOLDOWN_HOURS = 24;
 
 /** Лимит текста попап-алерта Telegram (порт `answer[:200]` Python-бота). */
 const ALERT_LIMIT = 200;
@@ -130,12 +128,13 @@ async function handlePrediction(
     throw err;
   }
 
+  const cooldownHours = await readCooldownHours(deps.prisma, cb.channelId);
   await saveCooldown(
     deps.prisma,
     cb.channelId,
     userId,
     cb.btnType,
-    nextExpiry(now, COOLDOWN_HOURS),
+    nextExpiry(now, cooldownHours),
     pick.recentKeys,
   );
   await ctx.answerCallbackQuery({ text: "Отправила в личку ✨" });

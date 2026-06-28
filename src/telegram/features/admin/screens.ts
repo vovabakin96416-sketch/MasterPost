@@ -8,6 +8,7 @@ import {
   resolveSelectedChannel,
 } from "./channelContext.js";
 import { readAutopostConfig } from "../../../services/autopostSettings.js";
+import { readCooldownHours } from "../../../services/cooldownSettings.js";
 import { isApprovalEnabled } from "../../../services/approvalService.js";
 import { countPending } from "../../../db/repositories/pendingPostRepository.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
@@ -39,8 +40,10 @@ import type { AdminDeps, Screen } from "./types.js";
  * плюс своим рендерером и веткой роутера.
  */
 
-/** Кулдаун триггеров, часов (read-only в меню; синхронно с triggerStage). */
-const COOLDOWN_HOURS = 24;
+/** Подпись кулдауна для меню: «N ч» или «выкл» при 0. */
+function cooldownLabel(hours: number): string {
+  return hours === 0 ? "выкл" : `${String(hours)} ч`;
+}
 
 /** Сколько триггеров/ответов/постов показываем на одной странице списка. */
 const PAGE_TRIGGERS = 8;
@@ -428,12 +431,10 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
   if (channel === null) {
     return noChannelScreen();
   }
-  const commentsOn = await getBooleanSetting(
-    deps.prisma,
-    channel.id,
-    COMMENTS_KEY,
-    true,
-  );
+  const [commentsOn, cooldownHours] = await Promise.all([
+    getBooleanSetting(deps.prisma, channel.id, COMMENTS_KEY, true),
+    readCooldownHours(deps.prisma, channel.id),
+  ]);
   return {
     text: "⚙️ Настройки",
     keyboard: buildKeyboard([
@@ -444,7 +445,7 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
         },
       ],
       [{ label: "🤖 AI-ответы: скоро ⏳", data: encodeCb("soon") }],
-      [{ label: `⏱ Кулдаун: ${String(COOLDOWN_HOURS)} ч`, data: encodeCb("soon") }],
+      [{ label: `⏱ Кулдаун: ${cooldownLabel(cooldownHours)}`, data: encodeCb("cd") }],
       navRow(),
     ]),
   };
@@ -456,10 +457,11 @@ export async function renderStatus(deps: AdminDeps): Promise<Screen> {
   if (channel === null) {
     return noChannelScreen();
   }
-  const [display, summaries, commentsOn] = await Promise.all([
+  const [display, summaries, commentsOn, cooldownHours] = await Promise.all([
     getChannelDisplay(deps.prisma, channel.id),
     listTriggerSummaries(deps.prisma, channel.id, channel.triggerWords),
     getBooleanSetting(deps.prisma, channel.id, COMMENTS_KEY, true),
+    readCooldownHours(deps.prisma, channel.id),
   ]);
   const totalAnswers = summaries.reduce((sum, s) => sum + s.count, 0);
   const title = display?.title ?? "—";
@@ -481,7 +483,7 @@ export async function renderStatus(deps: AdminDeps): Promise<Screen> {
     `Триггеров: ${String(channel.triggerWords.length)}`,
     `Ответов всего: ${String(totalAnswers)}`,
     `Ответы в комментах: ${commentsOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
-    `Кулдаун: ${String(COOLDOWN_HOURS)} ч`,
+    `Кулдаун: ${cooldownLabel(cooldownHours)}`,
     freshness,
   ];
   return { text: lines.join("\n"), keyboard: buildKeyboard([navRow()]) };
@@ -552,7 +554,6 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
     rows.push([{ label: `🕐 ${t}   ✖ удалить`, data: encodeCb("atdel", i) }]);
   });
   rows.push([{ label: "➕ Добавить время", data: encodeCb("atadd") }]);
-  rows.push([{ label: "📤 Опубликовать сейчас (тест)", data: encodeCb("apub") }]);
   rows.push(navRow());
 
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
@@ -649,6 +650,17 @@ export function renderAddTimePrompt(): Screen {
       "➕ Новое время публикации\n\nПришли время в формате ЧЧ:ММ " +
       "(например, 13:47). Можно любое время суток и сколько угодно времён.",
     keyboard: buildKeyboard([navRow(encodeCb("auto"))]),
+  };
+}
+
+/** Экран-приглашение: жду число часов кулдауна (0 — отключить). */
+export function renderSetCooldownPrompt(): Screen {
+  return {
+    text:
+      "⏱ Кулдаун триггеров\n\nПришли число часов одним сообщением (например, 24).\n" +
+      "Пользователь не сможет повторно дёргать триггер чаще, чем раз в это время.\n" +
+      "Пришли 0, чтобы отключить кулдаун.",
+    keyboard: buildKeyboard([navRow(encodeCb("set"))]),
   };
 }
 

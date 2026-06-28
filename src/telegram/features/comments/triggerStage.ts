@@ -20,10 +20,8 @@ import {
   saveCooldown,
 } from "../../../db/repositories/cooldownRepository.js";
 import { getBooleanSetting } from "../../../db/repositories/settingRepository.js";
+import { readCooldownHours } from "../../../services/cooldownSettings.js";
 import type { CommentStage } from "./types.js";
-
-/** Кулдаун на (канал, пользователь, слово), часов. Как COOLDOWN_HOURS в Python. */
-const COOLDOWN_HOURS = 24;
 
 /**
  * Алиасы слов-триггеров на ключ пула. «да»/«нет» — это оракул: оба слова тянут
@@ -152,12 +150,13 @@ export function createTriggerStage(): CommentStage {
       }
 
       // Кулдаун потребляем только когда реально отвечаем (как в Python).
+      const cooldownHours = await readCooldownHours(deps.prisma, channel.id);
       await saveCooldown(
         deps.prisma,
         channel.id,
         userId,
         triggerKey,
-        nextExpiry(now, COOLDOWN_HOURS),
+        nextExpiry(now, cooldownHours),
         pick.recentKeys,
       );
 

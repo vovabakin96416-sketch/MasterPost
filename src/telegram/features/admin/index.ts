@@ -7,6 +7,7 @@ import {
 import {
   validateAnswer,
   validateChannelTarget,
+  validateCooldownHours,
   validatePostField,
   validateTime,
   validateTriggerWord,
@@ -16,12 +17,11 @@ import {
   removeTimeAt,
   toggleAutopost,
 } from "../../../services/autopostSettings.js";
+import { setCooldownHours } from "../../../services/cooldownSettings.js";
 import {
-  publishNow,
   requestApprovalForPost,
   type PostingDeps,
   type PreviewNowResult,
-  type PublishNowResult,
 } from "../../../services/postingService.js";
 import { toggleApproval } from "../../../services/approvalService.js";
 import { sendContentEndingNotice } from "../../../services/analyticsService.js";
@@ -65,6 +65,7 @@ import {
   renderAutopost,
   renderMain,
   renderSetChannelPrompt,
+  renderSetCooldownPrompt,
   renderSettings,
   renderStatus,
   renderTrigger,
@@ -332,6 +333,12 @@ async function routeCallback(
       await ctx.answerCallbackQuery();
       return;
 
+    case "cd":
+      pending.set(adminId, { kind: "setCooldown" });
+      await editScreen(ctx, renderSetCooldownPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
     case "stat":
       await editScreen(ctx, await renderStatus(deps));
       await ctx.answerCallbackQuery();
@@ -378,27 +385,6 @@ async function routeCallback(
       await removeTimeAt(deps.prisma, channel.id, idx);
       await editScreen(ctx, await renderAutopost(deps));
       await ctx.answerCallbackQuery({ text: "Время удалено" });
-      return;
-    }
-
-    case "apub": {
-      const channel = await resolveSelectedChannel(deps);
-      if (channel === null) {
-        await ctx.answerCallbackQuery({ text: "Канал не найден.", show_alert: true });
-        return;
-      }
-      const postingDeps: PostingDeps = {
-        prisma: deps.prisma,
-        logger: deps.logger,
-        api: ctx.api,
-        adminId: deps.adminId,
-        pexelsApiKey: deps.pexelsApiKey,
-      };
-      const result = await publishNow(postingDeps, channel.id);
-      await ctx.answerCallbackQuery({
-        text: publishResultText(result),
-        show_alert: !result.ok,
-      });
       return;
     }
 
@@ -881,6 +867,23 @@ async function handleInput(
       return;
     }
 
+    case "setCooldown": {
+      const result = validateCooldownHours(text);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}`);
+        return; // остаёмся в режиме ввода
+      }
+      await setCooldownHours(deps.prisma, channel.id, result.value);
+      pending.delete(deps.adminId);
+      await ctx.reply(
+        result.value === 0
+          ? "✅ Кулдаун отключён."
+          : `✅ Кулдаун: ${String(result.value)} ч.`,
+      );
+      await sendScreen(ctx, await renderSettings(deps));
+      return;
+    }
+
     case "setChannel": {
       const result = validateChannelTarget(text);
       if (!result.ok) {
@@ -948,21 +951,6 @@ async function handleInput(
       await sendScreen(ctx, await renderButtonPoolByKey(deps, state.poolKey));
       return;
     }
-  }
-}
-
-/** Текст тоста по результату ручной публикации. */
-function publishResultText(result: PublishNowResult): string {
-  if (result.ok) {
-    return `✅ Опубликовано (неделя ${String(result.week)})`;
-  }
-  switch (result.reason) {
-    case "no_channel":
-      return "Канал не найден. Запусти сид: npm run seed.";
-    case "no_target":
-      return "Не задан канал публикации (chatId). Укажите его в настройках канала.";
-    case "no_post":
-      return "На сегодня нет постов в контент-плане.";
   }
 }
 

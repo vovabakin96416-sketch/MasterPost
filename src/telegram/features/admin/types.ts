@@ -40,6 +40,7 @@ export type PendingInput =
   | { readonly kind: "addAnswer"; readonly word: string }
   | { readonly kind: "editAnswer"; readonly word: string; readonly index: number }
   | { readonly kind: "addTime" }
+  | { readonly kind: "setCooldown" }
   | { readonly kind: "setChannel" }
   | { readonly kind: "addChannel" }
   | {

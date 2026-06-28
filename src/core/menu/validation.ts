@@ -16,6 +16,36 @@ export type ValidationResult =
   | { readonly ok: true; readonly value: string }
   | { readonly ok: false; readonly error: string };
 
+/** Результат валидации числового ввода (кулдаун) — несёт число, а не строку. */
+export type NumberValidationResult =
+  | { readonly ok: true; readonly value: number }
+  | { readonly ok: false; readonly error: string };
+
+/** Максимальный кулдаун триггеров в часах (неделя — разумный потолок). */
+export const MAX_COOLDOWN_HOURS = 168;
+
+/**
+ * Проверяет ввод кулдауна триггеров: целое число часов, 0…168.
+ * `0` разрешён и означает «кулдаун выключен» (триггер без задержки).
+ */
+export function validateCooldownHours(input: string): NumberValidationResult {
+  const trimmed = input.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return {
+      ok: false,
+      error: "Нужно целое число часов, например 24 (или 0, чтобы отключить).",
+    };
+  }
+  const hours = Number(trimmed);
+  if (hours > MAX_COOLDOWN_HOURS) {
+    return {
+      ok: false,
+      error: `Слишком много — максимум ${String(MAX_COOLDOWN_HOURS)} ч (неделя).`,
+    };
+  }
+  return { ok: true, value: hours };
+}
+
 /**
  * Проверяет текст нового/изменённого ответа: непустой и в пределах лимита.
  * Возвращает обрезанное по краям значение (как сохраним в пул).
