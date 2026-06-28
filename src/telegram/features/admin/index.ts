@@ -328,6 +328,11 @@ async function routeCallback(
     }
 
     case "apub": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery({ text: "Канал не найден.", show_alert: true });
+        return;
+      }
       const postingDeps: PostingDeps = {
         prisma: deps.prisma,
         logger: deps.logger,
@@ -335,7 +340,7 @@ async function routeCallback(
         adminId: deps.adminId,
         pexelsApiKey: deps.pexelsApiKey,
       };
-      const result = await publishNow(postingDeps);
+      const result = await publishNow(postingDeps, channel.id);
       await ctx.answerCallbackQuery({
         text: publishResultText(result),
         show_alert: !result.ok,
@@ -368,6 +373,11 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery({ text: "Канал не найден.", show_alert: true });
+        return;
+      }
       const postingDeps: PostingDeps = {
         prisma: deps.prisma,
         logger: deps.logger,
@@ -375,7 +385,7 @@ async function routeCallback(
         adminId: deps.adminId,
         pexelsApiKey: deps.pexelsApiKey,
       };
-      const result = await requestApprovalForPost(postingDeps, externalId);
+      const result = await requestApprovalForPost(postingDeps, channel.id, externalId);
       await ctx.answerCallbackQuery({
         text: previewResultText(result),
         show_alert: !result.ok,

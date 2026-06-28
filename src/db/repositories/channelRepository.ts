@@ -98,6 +98,28 @@ export async function getPostingChannel(
   });
 }
 
+/**
+ * Все активные каналы для планировщика автопостинга (Шаг 8b). Та же форма и тот же
+ * `select`, что у `getPostingChannel`, но списком — планировщик обходит каждый. Порядок
+ * `createdAt asc` совпадает с одноканальным резолвом (`findFirst`): канал №1 идёт первым.
+ */
+export async function listPostingChannels(
+  prisma: PrismaClient,
+): Promise<PostingChannel[]> {
+  return prisma.channel.findMany({
+    where: { isActive: true },
+    select: {
+      id: true,
+      chatId: true,
+      timezone: true,
+      campaignStart: true,
+      title: true,
+      username: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
 /** Канал по id в форме для триггеров/разделов меню (Шаг 8a). */
 export async function getChannelById(
   prisma: PrismaClient,

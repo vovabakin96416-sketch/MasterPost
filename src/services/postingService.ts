@@ -9,7 +9,8 @@ import {
 } from "../db/repositories/postRepository.js";
 import { buildPostKeyboard } from "./postButtons.js";
 import {
-  getPostingChannel,
+  getPostingChannelById,
+  listPostingChannels,
   type PostingChannel,
 } from "../db/repositories/channelRepository.js";
 import { localDateParts } from "../core/schedule/localDate.js";
@@ -174,16 +175,30 @@ function resolveNow(channel: PostingChannel): {
 }
 
 /**
- * Тик планировщика: публикует посты дня в наступившие времена. Дедуп по локальной
+ * Тик планировщика (Шаг 8b): обходит ВСЕ активные каналы и публикует посты в каждый.
+ * Ошибка одного канала изолирована (try/catch) — не роняет публикацию остальных.
+ */
+export async function publishDuePosts(deps: PostingDeps): Promise<void> {
+  const channels = await listPostingChannels(deps.prisma);
+  for (const channel of channels) {
+    try {
+      await publishDuePostsForChannel(deps, channel);
+    } catch (err) {
+      deps.logger.error({ err, channelId: channel.id }, "ошибка автопостинга канала");
+    }
+  }
+}
+
+/**
+ * Публикует посты дня одного канала в наступившие времена. Дедуп по локальной
  * дате (прогресс `{date, postedTimes}`): время отрабатывается раз в день, после
  * простоя — догоняет. Индекс поста = число уже опубликованных сегодня.
  */
-export async function publishDuePosts(deps: PostingDeps): Promise<void> {
+export async function publishDuePostsForChannel(
+  deps: PostingDeps,
+  channel: PostingChannel,
+): Promise<void> {
   const { prisma, logger } = deps;
-  const channel = await getPostingChannel(prisma);
-  if (channel === null) {
-    return;
-  }
   const config = await readAutopostConfig(prisma, channel.id);
   if (!config.enabled) {
     return;
@@ -264,12 +279,16 @@ export type PublishNowResult =
   | { ok: false; reason: "no_channel" | "no_target" | "no_post" };
 
 /**
- * Ручная публикация из меню («Опубликовать сейчас (тест)»). Шлёт ПЕРВЫЙ пост дня —
- * быстрый тест. Игнорирует тумблер и дедуп (явное действие админа), прогресс не трогает.
+ * Ручная публикация из меню («Опубликовать сейчас (тест)») для ВЫБРАННОГО канала
+ * (Шаг 8b). Шлёт ПЕРВЫЙ пост дня — быстрый тест. Игнорирует тумблер и дедуп (явное
+ * действие админа), прогресс не трогает.
  */
-export async function publishNow(deps: PostingDeps): Promise<PublishNowResult> {
+export async function publishNow(
+  deps: PostingDeps,
+  channelId: string,
+): Promise<PublishNowResult> {
   const { prisma, logger } = deps;
-  const channel = await getPostingChannel(prisma);
+  const channel = await getPostingChannelById(prisma, channelId);
   if (channel === null) {
     return { ok: false, reason: "no_channel" };
   }
@@ -371,7 +390,9 @@ export async function publishPending(
   if (pending === null) {
     return { ok: false, reason: "not_found" };
   }
-  const channel = await getPostingChannel(deps.prisma);
+  // Шаг 8b: одобренный пост уходит в СВОЙ канал (тот, для которого создан снимок),
+  // а не в «первый активный» — иначе с двумя каналами публикация попадёт не туда.
+  const channel = await getPostingChannelById(deps.prisma, pending.channelId);
   if (channel === null) {
     return { ok: false, reason: "no_channel" };
   }
@@ -412,15 +433,16 @@ export type PreviewNowResult =
   | { ok: false; reason: "no_channel" | "no_post" };
 
 /**
- * Шлёт админу превью на одобрение для КОНКРЕТНОГО поста контент-плана (кнопка
- * «👀 Прислать на тест» в экране поста). Не зависит от тумблера одобрения.
- * `no_post` = пост не найден (возможно, удалён).
+ * Шлёт админу превью на одобрение для КОНКРЕТНОГО поста контент-плана ВЫБРАННОГО
+ * канала (Шаг 8b; кнопка «👀 Прислать на тест» в экране поста). Не зависит от
+ * тумблера одобрения. `no_post` = пост не найден (возможно, удалён).
  */
 export async function requestApprovalForPost(
   deps: PostingDeps,
+  channelId: string,
   externalId: number,
 ): Promise<PreviewNowResult> {
-  const channel = await getPostingChannel(deps.prisma);
+  const channel = await getPostingChannelById(deps.prisma, channelId);
   if (channel === null) {
     return { ok: false, reason: "no_channel" };
   }

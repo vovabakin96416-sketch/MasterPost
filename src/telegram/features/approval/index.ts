@@ -21,7 +21,7 @@ import {
   updatePendingText,
 } from "../../../db/repositories/pendingPostRepository.js";
 import {
-  getPostingChannel,
+  getPostingChannelById,
 } from "../../../db/repositories/channelRepository.js";
 import { getPostPhotoSources } from "../../../db/repositories/postRepository.js";
 import { validateAnswer } from "../../../core/menu/validation.js";
@@ -105,9 +105,12 @@ function postingDepsOf(ctx: Context, deps: ApprovalDeps): PostingDeps {
   };
 }
 
-/** Текущая цель публикации (для подписи превью). */
-async function currentTarget(deps: ApprovalDeps): Promise<string | null> {
-  const channel = await getPostingChannel(deps.prisma);
+/** Цель публикации канала поста (для подписи превью — куда уйдёт, Шаг 8b). */
+async function currentTarget(
+  deps: ApprovalDeps,
+  channelId: string,
+): Promise<string | null> {
+  const channel = await getPostingChannelById(deps.prisma, channelId);
   return channel?.chatId ?? null;
 }
 
@@ -220,7 +223,7 @@ async function handleReroll(ctx: Context, deps: ApprovalDeps, id: string): Promi
   await editResolved(ctx, "🔄 Подобрано другое фото — новое превью ниже:");
   await sendApprovalPreview(
     postingDepsOf(ctx, deps),
-    buildApprovalCaption(updated, await currentTarget(deps)),
+    buildApprovalCaption(updated, await currentTarget(deps, updated.channelId)),
     id,
     photoRefFromCache(url),
   );
@@ -249,7 +252,7 @@ async function handleOwnPhoto(
   await ctx.reply("🖼 Фото обновлено — вот новое превью:");
   await sendApprovalPreview(
     postingDepsOf(ctx, deps),
-    buildApprovalCaption(updated, await currentTarget(deps)),
+    buildApprovalCaption(updated, await currentTarget(deps, updated.channelId)),
     pendingId,
     photoRefFromCache(fileId),
   );
@@ -277,7 +280,7 @@ async function handleEdit(
   await ctx.reply("✍️ Текст обновлён — вот новое превью:");
   await sendApprovalPreview(
     postingDepsOf(ctx, deps),
-    buildApprovalCaption(updated, await currentTarget(deps)),
+    buildApprovalCaption(updated, await currentTarget(deps, updated.channelId)),
     updated.id,
     photoRefFromCache(updated.photoUrl),
   );
