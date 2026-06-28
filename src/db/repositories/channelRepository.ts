@@ -98,6 +98,92 @@ export async function getPostingChannel(
   });
 }
 
+/** Канал по id в форме для триггеров/разделов меню (Шаг 8a). */
+export async function getChannelById(
+  prisma: PrismaClient,
+  id: string,
+): Promise<ActiveChannel | null> {
+  return prisma.channel.findUnique({
+    where: { id },
+    select: { id: true, triggerWords: true },
+  });
+}
+
+/** Канал по id в форме для автопостинга/аналитики (Шаг 8a). */
+export async function getPostingChannelById(
+  prisma: PrismaClient,
+  id: string,
+): Promise<PostingChannel | null> {
+  return prisma.channel.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      chatId: true,
+      timezone: true,
+      campaignStart: true,
+      title: true,
+      username: true,
+    },
+  });
+}
+
+/** Сводка канала для списка «📡 Каналы» в меню (Шаг 8a). */
+export interface ChannelListItem {
+  id: string;
+  title: string;
+  username: string | null;
+  chatId: string | null;
+  niche: string;
+  isActive: boolean;
+}
+
+/**
+ * Все каналы владельца для переключателя в /menu (Шаг 8a). Порядок — `createdAt asc`,
+ * тот же, что у одноканального резолва рантайма (`findFirst`), поэтому «первый» канал
+ * совпадает с тем, что ведёт автопостинг/триггеры до подшагов 8b/8c.
+ */
+export async function listChannels(
+  prisma: PrismaClient,
+): Promise<ChannelListItem[]> {
+  return prisma.channel.findMany({
+    select: {
+      id: true,
+      title: true,
+      username: true,
+      chatId: true,
+      niche: true,
+      isActive: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+/**
+ * Создаёт ПУСТОЙ канал (без контент-плана/пулов) для мультиканальности (Шаг 8a).
+ * Минимум полей: название от владельца + ниша-заглушка; остальное — дефолты схемы
+ * (язык ru, пояс Europe/Moscow, isActive, пустые triggerWords). Отдельно от
+ * `upsertChannel` (тот по username, для сида). Возвращает id нового канала.
+ */
+export async function createChannel(
+  prisma: PrismaClient,
+  data: { title: string },
+): Promise<string> {
+  const channel = await prisma.channel.create({
+    data: { title: data.title, niche: "—" },
+    select: { id: true },
+  });
+  return channel.id;
+}
+
+/** Включает/выключает канал (Шаг 8a). Неактивный канал рантайм не ведёт. */
+export async function setChannelActive(
+  prisma: PrismaClient,
+  id: string,
+  isActive: boolean,
+): Promise<void> {
+  await prisma.channel.update({ where: { id }, data: { isActive } });
+}
+
 /** Отображаемые данные канала для экрана «Статус». */
 export interface ChannelDisplay {
   title: string;

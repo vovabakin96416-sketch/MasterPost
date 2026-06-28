@@ -1,11 +1,12 @@
 import { encodeCb } from "../../../core/menu/callbackData.js";
 import { paginate } from "../../../core/menu/paginate.js";
 import { poolHealth, poolAgeDays } from "../../../core/content/poolHealth.js";
+import { getChannelDisplay } from "../../../db/repositories/channelRepository.js";
 import {
-  getActiveChannel,
-  getChannelDisplay,
-  getPostingChannel,
-} from "../../../db/repositories/channelRepository.js";
+  resolveChannelMenu,
+  resolvePostingChannelSelected,
+  resolveSelectedChannel,
+} from "./channelContext.js";
 import { readAutopostConfig } from "../../../services/autopostSettings.js";
 import { isApprovalEnabled } from "../../../services/approvalService.js";
 import { countPending } from "../../../db/repositories/pendingPostRepository.js";
@@ -103,6 +104,7 @@ interface Section {
 }
 
 export const MAIN_SECTIONS: readonly Section[] = [
+  { label: "📡 Каналы", data: encodeCb("ch") },
   { label: "💬 Триггеры", data: encodeCb("trg", 0) },
   { label: "⚙️ Настройки", data: encodeCb("set") },
   { label: "📊 Статус", data: encodeCb("stat") },
@@ -160,12 +162,98 @@ function noChannelScreen(): Screen {
   };
 }
 
-/** Экран 1 — главное меню. */
-export function renderMain(): Screen {
+/** Подпись канала для шапки/списка: «Название (@username)» или «Название». */
+function channelLabel(item: { title: string; username: string | null }): string {
+  return item.username ? `${item.title} (@${item.username})` : item.title;
+}
+
+/**
+ * Экран 1 — главное меню. Шапка показывает текущий канал (Шаг 8a): владелец видит,
+ * каким каналом управляет, и переключает его в разделе «📡 Каналы».
+ */
+export async function renderMain(deps: AdminDeps): Promise<Screen> {
+  const { channels, currentId } = await resolveChannelMenu(deps);
+  const current = channels.find((c) => c.id === currentId);
+  const header = current
+    ? `📡 Канал: ${channelLabel(current)}`
+    : "📡 Канал не выбран — добавь в разделе «Каналы».";
   const rows = MAIN_SECTIONS.map((s): Btn[] => [{ label: s.label, data: s.data }]);
   return {
-    text: "🤖 Меню управления каналом\n\nВыбери раздел:",
+    text: `🤖 Меню управления\n\n${header}\n\nВыбери раздел:`,
     keyboard: buildKeyboard(rows),
+  };
+}
+
+/**
+ * Экран «📡 Каналы» (Шаг 8a) — реестр каналов владельца + переключатель текущего.
+ * Маркер ● у текущего; «○» у активного, «🔇» у выключенного. Кнопка слова канала
+ * делает его текущим; «⚙️» открывает карточку; «➕» добавляет новый.
+ */
+export async function renderChannels(deps: AdminDeps): Promise<Screen> {
+  const { channels, currentId } = await resolveChannelMenu(deps);
+
+  const rows: Btn[][] = channels.map((c, i): Btn[] => {
+    const mark = c.id === currentId ? "● " : c.isActive ? "○ " : "🔇 ";
+    return [
+      { label: `${mark}${channelLabel(c)}`, data: encodeCb("chsel", i) },
+      { label: "⚙️", data: encodeCb("chd", i) },
+    ];
+  });
+  rows.push([{ label: "➕ Добавить канал", data: encodeCb("chadd") }]);
+  rows.push(navRow());
+
+  const header =
+    channels.length === 0
+      ? "📡 Каналы\n\nПока нет ни одного канала. Добавь первый — или запусти сид."
+      : `📡 Каналы (${String(channels.length)})\n\nНажми канал, чтобы сделать его текущим (с ним работают все разделы меню). ⚙️ — карточка канала.\n\n● текущий · ○ активный · 🔇 выключен`;
+  return { text: header, keyboard: buildKeyboard(rows) };
+}
+
+/** Экран — карточка одного канала (Шаг 8a): сводка + сделать текущим / цель / активность. */
+export async function renderChannelDetail(
+  deps: AdminDeps,
+  idx: number,
+): Promise<Screen> {
+  const { channels, currentId } = await resolveChannelMenu(deps);
+  const channel = channels[idx];
+  if (channel === undefined) {
+    return renderChannels(deps);
+  }
+
+  const isCurrent = channel.id === currentId;
+  const lines = [
+    `📡 ${channelLabel(channel)}`,
+    "",
+    `Ниша: ${channel.niche}`,
+    `Канал публикации: ${channel.chatId ?? "не задан ⚠️"}`,
+    `Активность: ${channel.isActive ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+    isCurrent ? "\nЭто текущий канал — им управляют все разделы меню." : "",
+    "\nℹ️ Автопостинг и ответы в комментах сейчас ведёт только первый канал; мультиканальный рантайм — следующий подшаг (8b/8c).",
+  ];
+
+  const rows: Btn[][] = [];
+  if (!isCurrent) {
+    rows.push([{ label: "✅ Сделать текущим", data: encodeCb("chsel", idx) }]);
+  }
+  rows.push([{ label: "🎯 Канал публикации", data: encodeCb("chtgt", idx) }]);
+  rows.push([
+    {
+      label: channel.isActive ? "🔇 Выключить канал" : "✅ Включить канал",
+      data: encodeCb("chact", idx),
+    },
+  ]);
+  rows.push(navRow(encodeCb("ch")));
+
+  return { text: lines.filter((l) => l !== "").join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/** Экран-приглашение: жду название нового канала (Шаг 8a). */
+export function renderAddChannelPrompt(): Screen {
+  return {
+    text:
+      "➕ Новый канал\n\nПришли название канала одним сообщением (например: Бизнес-советы).\n" +
+      "Канал создастся пустым и станет текущим — контент, триггеры и цель публикации зададим в разделах меню.",
+    keyboard: buildKeyboard([navRow(encodeCb("ch"))]),
   };
 }
 
@@ -174,7 +262,7 @@ export async function renderTriggers(
   deps: AdminDeps,
   page: number,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -219,7 +307,7 @@ export async function renderTrigger(
   wordIdx: number,
   page: number,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -278,7 +366,7 @@ export async function renderAnswer(
   wordIdx: number,
   answerIdx: number,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -312,7 +400,7 @@ export async function renderAnswer(
 
 /** Экран — настройки (тумблеры). */
 export async function renderSettings(deps: AdminDeps): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -340,7 +428,7 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
 
 /** Экран — статус канала (сводка). */
 export async function renderStatus(deps: AdminDeps): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -397,7 +485,7 @@ export function renderAddAnswerPrompt(word: string, wordIdx: number): Screen {
 
 /** Экран — автопостинг (Доработка 4.1): статус, канал, неделя/день, список времён. */
 export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
-  const channel = await getPostingChannel(deps.prisma);
+  const channel = await resolvePostingChannelSelected(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -448,7 +536,7 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
 
 /** Экран — одобрение постов (Шаг 5): тумблер + сколько ждут + тест-превью. */
 export async function renderApproval(deps: AdminDeps): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -486,7 +574,7 @@ export async function renderApproval(deps: AdminDeps): Promise<Screen> {
  * его конце. Отчёт по просмотрам/реакциям (через личный аккаунт) — подшаги 7b/7c.
  */
 export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
-  const channel = await getPostingChannel(deps.prisma);
+  const channel = await resolvePostingChannelSelected(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -573,7 +661,7 @@ export function postFieldByCode(code: number): EditablePostField | undefined {
 
 /** Экран — контент-план: список недель с числом постов (Шаг 6.5). */
 export async function renderPlan(deps: AdminDeps): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -599,7 +687,7 @@ export async function renderPlanWeek(
   week: number,
   page: number,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -637,7 +725,7 @@ export async function renderPlanPost(
   deps: AdminDeps,
   externalId: number,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -690,7 +778,7 @@ export async function renderDeletePostConfirm(
   deps: AdminDeps,
   externalId: number,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -723,7 +811,7 @@ export async function buttonPoolKeyAt(
   deps: AdminDeps,
   poolIdx: number,
 ): Promise<string | undefined> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return undefined;
   }
@@ -733,7 +821,7 @@ export async function buttonPoolKeyAt(
 
 /** Экран — список пулов кнопок-предсказаний (доработка 6b). */
 export async function renderButtonPools(deps: AdminDeps): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -771,7 +859,7 @@ export async function renderButtonPool(
   poolIdx: number,
   page: number,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -837,7 +925,7 @@ export async function renderButtonAnswer(
   poolIdx: number,
   answerIdx: number,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return noChannelScreen();
   }
@@ -899,9 +987,9 @@ export async function renderButtonPoolByKey(
   deps: AdminDeps,
   key: string,
 ): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
-    return renderMain();
+    return renderMain(deps);
   }
   const pools = await listButtonPools(deps.prisma, channel.id);
   const idx = pools.findIndex((p) => p.key === key);

@@ -24,10 +24,16 @@ import { sendContentEndingNotice } from "../../../services/analyticsService.js";
 import { sendWeeklyReportNow } from "../../../services/analytics/weeklyReportService.js";
 import {
   addTrigger,
-  getActiveChannel,
+  createChannel,
   removeTrigger,
+  setChannelActive,
   setChatId,
 } from "../../../db/repositories/channelRepository.js";
+import {
+  resolveChannelMenu,
+  resolveSelectedChannel,
+  setSelectedChannel,
+} from "./channelContext.js";
 import {
   addText,
   getTextPool,
@@ -43,6 +49,9 @@ import {
 import { toggleBooleanSetting } from "../../../db/repositories/settingRepository.js";
 import {
   renderAddAnswerPrompt,
+  renderAddChannelPrompt,
+  renderChannels,
+  renderChannelDetail,
   renderAddTriggerPrompt,
   renderAnswer,
   renderEditAnswerPrompt,
@@ -105,7 +114,7 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
       return;
     }
     pending.delete(adminId);
-    await sendScreen(ctx, renderMain());
+    await sendScreen(ctx, await renderMain(deps));
   });
 
   // Всё остальное меню — только админ.
@@ -127,7 +136,7 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
     // Нажатие постоянной кнопки «📋 Меню» = открыть меню (как /menu), отменив ввод.
     if (ctx.message.text === MENU_BUTTON_TEXT) {
       pending.delete(adminId);
-      await sendScreen(ctx, renderMain());
+      await sendScreen(ctx, await renderMain(deps));
       return;
     }
     const state = pending.get(adminId);
@@ -182,9 +191,82 @@ async function routeCallback(
 
   switch (action) {
     case "home":
-      await editScreen(ctx, renderMain());
+      await editScreen(ctx, await renderMain(deps));
       await ctx.answerCallbackQuery();
       return;
+
+    case "ch":
+      await editScreen(ctx, await renderChannels(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "chsel": {
+      const idx = intArg(args, 0);
+      const { channels } = await resolveChannelMenu(deps);
+      const channel = idx === null ? undefined : channels[idx];
+      if (channel === undefined) {
+        await editScreen(ctx, await renderChannels(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      setSelectedChannel(adminId, channel.id);
+      deps.logger.info({ channelId: channel.id }, "выбран текущий канал");
+      await editScreen(ctx, await renderChannels(deps));
+      await ctx.answerCallbackQuery({ text: `Текущий канал: ${channel.title}` });
+      return;
+    }
+
+    case "chadd":
+      pending.set(adminId, { kind: "addChannel" });
+      await editScreen(ctx, renderAddChannelPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "chd": {
+      const idx = intArg(args, 0);
+      if (idx === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await editScreen(ctx, await renderChannelDetail(deps, idx));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "chtgt": {
+      // Указать цель публикации для канала из карточки: делаем его текущим и ждём ввод
+      // (тот же поток `setChannel`, что в «Автопостинге», — пишет в выбранный канал).
+      const idx = intArg(args, 0);
+      const { channels } = await resolveChannelMenu(deps);
+      const channel = idx === null ? undefined : channels[idx];
+      if (channel === undefined) {
+        await editScreen(ctx, await renderChannels(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      setSelectedChannel(adminId, channel.id);
+      pending.set(adminId, { kind: "setChannel" });
+      await editScreen(ctx, renderSetChannelPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "chact": {
+      const idx = intArg(args, 0);
+      const { channels } = await resolveChannelMenu(deps);
+      const channel = idx === null ? undefined : channels[idx];
+      if (idx === null || channel === undefined) {
+        await editScreen(ctx, await renderChannels(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await setChannelActive(deps.prisma, channel.id, !channel.isActive);
+      await editScreen(ctx, await renderChannelDetail(deps, idx));
+      await ctx.answerCallbackQuery({
+        text: channel.isActive ? "Канал выключен" : "Канал включён",
+      });
+      return;
+    }
 
     case "trg":
       await editScreen(ctx, await renderTriggers(deps, intArg(args, 0) ?? 0));
@@ -207,7 +289,7 @@ async function routeCallback(
       return;
 
     case "atgl": {
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       if (channel === null) {
         await ctx.answerCallbackQuery();
         return;
@@ -234,7 +316,7 @@ async function routeCallback(
 
     case "atdel": {
       const idx = intArg(args, 0);
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       if (idx === null || channel === null) {
         await ctx.answerCallbackQuery();
         return;
@@ -267,7 +349,7 @@ async function routeCallback(
       return;
 
     case "aptgl": {
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       if (channel === null) {
         await ctx.answerCallbackQuery();
         return;
@@ -374,7 +456,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       if (channel !== null) {
         await removeText(deps.prisma, channel.id, word, aIdx);
       }
@@ -391,7 +473,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       if (channel !== null) {
         await removeTrigger(deps.prisma, channel.id, word);
         deps.logger.info({ channelId: channel.id, word }, "триггер удалён");
@@ -407,7 +489,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       if (channel === null) {
         await ctx.answerCallbackQuery();
         return;
@@ -459,7 +541,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       const post =
         channel === null
           ? null
@@ -492,7 +574,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       let week: number | null = null;
       if (channel !== null) {
         const post = await getPostDetail(deps.prisma, channel.id, externalId);
@@ -594,7 +676,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      const channel = await getActiveChannel(deps.prisma);
+      const channel = await resolveSelectedChannel(deps);
       if (channel !== null) {
         await removeText(deps.prisma, channel.id, key, ansIdx);
       }
@@ -649,10 +731,29 @@ async function handleInput(
   state: PendingInput,
   text: string,
 ): Promise<void> {
-  const channel = await getActiveChannel(deps.prisma);
+  // Создание канала не требует существующего канала (это может быть самый первый) —
+  // обрабатываем до проверки на наличие текущего канала.
+  if (state.kind === "addChannel") {
+    const title = text.trim();
+    if (title.length === 0 || title.length > 100) {
+      await ctx.reply("⚠️ Название канала: 1–100 символов. Попробуй ещё раз.");
+      return; // остаёмся в режиме ввода
+    }
+    const id = await createChannel(deps.prisma, { title });
+    setSelectedChannel(deps.adminId, id);
+    pending.delete(deps.adminId);
+    deps.logger.info({ channelId: id, title }, "канал создан и выбран текущим");
+    await ctx.reply(
+      `✅ Канал «${title}» создан и стал текущим.\nЗаполни его в разделах меню: триггеры, контент-план, цель публикации.`,
+    );
+    await sendScreen(ctx, await renderChannels(deps));
+    return;
+  }
+
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     pending.delete(deps.adminId);
-    await sendScreen(ctx, renderMain());
+    await sendScreen(ctx, await renderMain(deps));
     return;
   }
 
@@ -816,7 +917,7 @@ function previewResultText(result: PreviewNowResult): string {
 
 /** Слово-триггер по индексу в актуальном списке канала (или undefined). */
 async function wordAt(deps: AdminDeps, wordIdx: number): Promise<string | undefined> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   return channel?.triggerWords[wordIdx];
 }
 
@@ -826,7 +927,7 @@ async function answerAt(
   word: string,
   answerIdx: number,
 ): Promise<string | undefined> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return undefined;
   }
@@ -836,7 +937,7 @@ async function answerAt(
 
 /** Человекочитаемая подпись пула кнопок: label из поста или сам ключ (доработка 6b). */
 async function buttonPoolName(deps: AdminDeps, key: string): Promise<string> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
     return key;
   }
@@ -846,9 +947,9 @@ async function buttonPoolName(deps: AdminDeps, key: string): Promise<string> {
 
 /** Экран триггера, найденного по слову (индекс резолвим из актуального списка). */
 async function renderTriggerByWord(deps: AdminDeps, word: string): Promise<Screen> {
-  const channel = await getActiveChannel(deps.prisma);
+  const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
-    return renderMain();
+    return await renderMain(deps);
   }
   const idx = channel.triggerWords.indexOf(word);
   if (idx === -1) {
