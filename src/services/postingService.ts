@@ -123,12 +123,20 @@ export async function sendPost(
       });
       return;
     } catch (err) {
+      // Кривой Markdown — пробуем то же фото без разметки. Если и повтор упал (или
+      // ошибка вовсе не про разметку — битый URL, нет файла) — НЕ роняем пост:
+      // логируем и уходим в текстовую ветку ниже. Повтор тоже под try, иначе его
+      // ошибка вылетит мимо фолбэка и «съест» пост/превью.
       if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
-        await api.sendPhoto(chatId, input, { caption, ...markup(keyboard) });
-        return;
+        try {
+          await api.sendPhoto(chatId, input, { caption, ...markup(keyboard) });
+          return;
+        } catch (retryErr) {
+          logger.warn({ err: retryErr }, "не смог отправить фото — публикую текстом");
+        }
+      } else {
+        logger.warn({ err }, "не смог отправить фото — публикую текстом");
       }
-      logger.warn({ err }, "не смог отправить фото — публикую текстом");
-      // не наша ошибка разметки → откатываемся на текстовую ветку ниже
     }
   }
   try {
@@ -303,10 +311,23 @@ export async function sendApprovalPreview(
   pendingId: string,
   photo: PhotoRef | null,
 ): Promise<void> {
+  const keyboard = approvalKeyboard(pendingId);
   try {
-    await sendPost(deps, deps.adminId, caption, photo, approvalKeyboard(pendingId));
+    await sendPost(deps, deps.adminId, caption, photo, keyboard);
+    return;
   } catch (err) {
-    deps.logger.error({ err }, "не смог отправить превью одобрения");
+    deps.logger.error({ err }, "не смог отправить превью одобрения — пробую простой текст");
+  }
+  // Последний фолбэк: без фото и без Markdown, чтобы кнопки одобрения точно дошли
+  // (даже если виноваты битое фото и/или кривая разметка поста).
+  try {
+    await deps.api.sendMessage(deps.adminId, caption, { reply_markup: keyboard });
+  } catch (err) {
+    deps.logger.error({ err }, "не смог отправить даже текстовое превью одобрения");
+    await notifyAdmin(
+      deps,
+      `⚠️ Не удалось прислать пост на одобрение (id ${pendingId}). Откройте «📋 Меню → Одобрение постов» и нажмите на посте «👀 Прислать на тест».`,
+    );
   }
 }
 
