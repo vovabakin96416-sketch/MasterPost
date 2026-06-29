@@ -28,8 +28,10 @@ import {
   type EditablePostField,
 } from "../../../db/repositories/postRepository.js";
 import { getBooleanSetting } from "../../../db/repositories/settingRepository.js";
+import { buildPostMessage } from "../../../services/postingService.js";
+import type { InteractiveType } from "../../../db/repositories/postRepository.js";
 import { buildKeyboard, navRow, pageRow, preview, type Btn } from "./keyboard.js";
-import type { AdminDeps, Screen } from "./types.js";
+import type { AdminDeps, NewPostDraft, Screen } from "./types.js";
 
 /**
  * Рендереры экранов меню. Каждый возвращает `Screen` (текст + клавиатура).
@@ -708,12 +710,13 @@ export async function renderPlan(deps: AdminDeps): Promise<Screen> {
       data: encodeCb("pw", w.week),
     },
   ]);
+  rows.push([{ label: "➕ Новый пост (разовый)", data: encodeCb("np") }]);
   rows.push(navRow());
 
   const header =
     weeks.length === 0
-      ? "🗂 Контент-план\n\nПостов пока нет. Залей план: `npm run seed`."
-      : `🗂 Контент-план (${String(weeks.length)} нед.)\n\nВыбери неделю — посмотреть и отредактировать посты.`;
+      ? "🗂 Контент-план\n\nПостов недельного плана пока нет (залей: `npm run seed`).\nМожно добавить разовый пост ниже."
+      : `🗂 Контент-план (${String(weeks.length)} нед.)\n\nВыбери неделю — посмотреть и отредактировать посты, либо добавь разовый пост.`;
   return { text: header, keyboard: buildKeyboard(rows) };
 }
 
@@ -1033,4 +1036,146 @@ export async function renderButtonPoolByKey(
     return renderButtonPools(deps);
   }
   return renderButtonPool(deps, idx, 0);
+}
+
+// ─── Мастер «Новый пост» (разовая публикация, Шаг 6c) ─────────────────────────
+
+/** Типы интерактива в порядке кнопок мастера (код = индекс). */
+const NEW_POST_INTERACTIVE: readonly { type: InteractiveType; label: string }[] = [
+  { type: "keyword_trigger", label: "Без кнопок" },
+  { type: "button_choice", label: "Кнопки-варианты" },
+  { type: "button_prediction", label: "Кнопка → ответ в личку" },
+  { type: "vote_123", label: "Голосование (реакции)" },
+];
+
+/** Тип интерактива по коду кнопки мастера (или undefined). */
+export function newPostInteractiveByCode(code: number): InteractiveType | undefined {
+  return NEW_POST_INTERACTIVE[code]?.type;
+}
+
+/** Ряд «✖ Отмена» — выйти из мастера, сбросив черновик. */
+function cancelRow(): Btn[] {
+  return [{ label: "✖ Отмена", data: encodeCb("npx") }];
+}
+
+/** Дата-время в поясе канала: «ДД.ММ.ГГГГ ЧЧ:ММ». */
+function fmtLocalDateTime(date: Date, timeZone: string): string {
+  const p = localDateParts(date, timeZone);
+  const pad = (n: number): string => (n < 10 ? `0${String(n)}` : String(n));
+  return `${pad(p.day)}.${pad(p.month)}.${String(p.year)} ${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+/** Универсальный экран-приглашение шага мастера (текст + «Отмена»). */
+export function renderNewPostPrompt(text: string): Screen {
+  return { text, keyboard: buildKeyboard([cancelRow()]) };
+}
+
+/** Экран выбора типа интерактива. */
+export function renderNewPostInteractive(): Screen {
+  const rows: Btn[][] = NEW_POST_INTERACTIVE.map((it, i) => [
+    { label: it.label, data: encodeCb("npit", i) },
+  ]);
+  rows.push(cancelRow());
+  return {
+    text: "🧩 Интерактив поста\n\nВыбери, что добавить к посту.",
+    keyboard: buildKeyboard(rows),
+  };
+}
+
+/** Экран цикла ввода вариантов button_choice (накопленные + «Готово»). */
+export function renderNewPostChoices(draft: NewPostDraft): Screen {
+  const list =
+    draft.choices.length === 0
+      ? "Пока нет вариантов."
+      : draft.choices
+          .map((c, i) => `${String(i + 1)}. ${c.label} → ${preview(c.answer, 40)}`)
+          .join("\n");
+  const rows: Btn[][] = [];
+  if (draft.choices.length > 0) {
+    rows.push([
+      { label: `✅ Готово (${String(draft.choices.length)})`, data: encodeCb("npcd") },
+    ]);
+  }
+  rows.push(cancelRow());
+  return {
+    text:
+      "🔘 Кнопки-варианты\n\n" +
+      "Пришли вариант в формате «метка | ответ» (ответ покажется попапом при нажатии). " +
+      "Добавляй по одному; когда хватит — нажми «Готово».\n\n" +
+      list,
+    keyboard: buildKeyboard(rows),
+  };
+}
+
+/** Экран выбора пула для button_prediction (пулы кнопок канала). */
+export async function renderNewPostPools(deps: AdminDeps): Promise<Screen> {
+  const channel = await resolveSelectedChannel(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const [pools, meta] = await Promise.all([
+    listButtonPools(deps.prisma, channel.id),
+    getButtonPoolMeta(deps.prisma, channel.id),
+  ]);
+  if (pools.length === 0) {
+    return {
+      text:
+        "🔮 Нет пулов кнопок-предсказаний.\n\nСначала создай пул в разделе " +
+        "«🔘 Кнопки под постами» или выбери другой тип интерактива.",
+      keyboard: buildKeyboard([cancelRow()]),
+    };
+  }
+  const rows: Btn[][] = pools.map((pool, i) => [
+    {
+      label: `${meta.get(pool.key)?.label ?? pool.key} (${String(pool.count)})`,
+      data: encodeCb("nppl", i),
+    },
+  ]);
+  rows.push(cancelRow());
+  return {
+    text: "🔮 Выбери пул предсказаний для кнопки.",
+    keyboard: buildKeyboard(rows),
+  };
+}
+
+/** Экран выбора источника фото. */
+export function renderNewPostPhoto(): Screen {
+  const rows: Btn[][] = [
+    [{ label: "🔎 Запрос Pexels", data: encodeCb("npph", 0) }],
+    [{ label: "📤 Загрузить фото", data: encodeCb("npph", 1) }],
+    [{ label: "🚫 Без фото", data: encodeCb("npph", 2) }],
+    cancelRow(),
+  ];
+  return { text: "🖼 Фото поста\n\nВыбери источник фото.", keyboard: buildKeyboard(rows) };
+}
+
+/** Экран предпросмотра разового поста перед планированием. */
+export function renderNewPostPreview(draft: NewPostDraft, timeZone: string): Screen {
+  const body = buildPostMessage({
+    title: draft.title ?? "",
+    text: draft.text ?? "",
+    cta: draft.cta ?? "",
+  });
+  const interactive =
+    draft.interactiveType === undefined
+      ? "—"
+      : (INTERACTIVE_RU[draft.interactiveType] ?? draft.interactiveType);
+  const photo =
+    draft.photoFileId !== null
+      ? "своё фото"
+      : draft.pexelsQuery !== null
+        ? `Pexels: ${draft.pexelsQuery}`
+        : "без фото";
+  const when =
+    draft.publishAt === undefined ? "—" : fmtLocalDateTime(draft.publishAt, timeZone);
+  const text =
+    `👀 Предпросмотр разового поста\n\n${body}\n\n` +
+    `— Интерактив: ${interactive}\n— Фото: ${photo}\n— Публикация: ${when} (${timeZone})`;
+  return {
+    text,
+    keyboard: buildKeyboard([
+      [{ label: "✅ Запланировать", data: encodeCb("npsave") }],
+      cancelRow(),
+    ]),
+  };
 }

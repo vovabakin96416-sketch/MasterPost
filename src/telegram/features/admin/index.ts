@@ -8,6 +8,7 @@ import {
   validateAnswer,
   validateChannelTarget,
   validateCooldownHours,
+  validateDateTime,
   validatePostField,
   validateTime,
   validateTriggerWord,
@@ -35,6 +36,7 @@ import {
 } from "../../../db/repositories/channelRepository.js";
 import {
   resolveChannelMenu,
+  resolvePostingChannelSelected,
   resolveSelectedChannel,
   setSelectedChannel,
 } from "./channelContext.js";
@@ -45,6 +47,7 @@ import {
   updateText,
 } from "../../../db/repositories/textPoolRepository.js";
 import {
+  createOneOffPost,
   deletePost,
   getButtonPoolMeta,
   getPostDetail,
@@ -84,8 +87,15 @@ import {
   renderButtonPoolByKey,
   buttonPoolKeyAt,
   renderAnalytics,
+  renderNewPostPrompt,
+  renderNewPostInteractive,
+  newPostInteractiveByCode,
+  renderNewPostChoices,
+  renderNewPostPools,
+  renderNewPostPhoto,
+  renderNewPostPreview,
 } from "./screens.js";
-import type { AdminDeps, PendingInput, Screen } from "./types.js";
+import type { AdminDeps, NewPostDraft, PendingInput, Screen } from "./types.js";
 
 /** Текст постоянной кнопки, открывающей меню одним нажатием (вместо ввода /menu). */
 export const MENU_BUTTON_TEXT = "📋 Меню";
@@ -113,6 +123,9 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
   // Состояние «жду текст» по пользователю (один админ, один процесс).
   const pending = new Map<number, PendingInput>();
 
+  // Черновики мастера «Новый пост» (Шаг 6c) — копятся между шагами, эфемерны.
+  const newPostDrafts = new Map<number, NewPostDraft>();
+
   // /menu — единственная точка входа. Не-админу — вежливый отказ.
   composer.command("menu", async (ctx) => {
     if (ctx.from?.id !== adminId) {
@@ -134,7 +147,11 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
     }
     // Любое нажатие кнопки отменяет режим ожидания ввода.
     pending.delete(adminId);
-    await routeCallback(ctx, deps, pending, parsed.action, parsed.args);
+    // Выход из мастера «Новый пост» (кнопка не из мастера) — сбрасываем черновик.
+    if (!parsed.action.startsWith("np")) {
+      newPostDrafts.delete(adminId);
+    }
+    await routeCallback(ctx, deps, pending, newPostDrafts, parsed.action, parsed.args);
   });
 
   // Текстовый ввод в личке — только когда ждём его (иначе отдаём дальше).
@@ -142,6 +159,7 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
     // Нажатие постоянной кнопки «📋 Меню» = открыть меню (как /menu), отменив ввод.
     if (ctx.message.text === MENU_BUTTON_TEXT) {
       pending.delete(adminId);
+      newPostDrafts.delete(adminId);
       await sendScreen(ctx, await renderMain(deps));
       return;
     }
@@ -156,10 +174,45 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
       await next();
       return;
     }
-    await handleInput(ctx, deps, pending, state, text);
+    await handleInput(ctx, deps, pending, newPostDrafts, state, text);
+  });
+
+  // Фото в личке — только когда мастер «Новый пост» ждёт картинку (иначе дальше).
+  admin.chatType("private").on("message:photo", async (ctx, next) => {
+    if (pending.get(adminId)?.kind !== "npPhotoUp") {
+      await next();
+      return;
+    }
+    const draft = newPostDrafts.get(adminId);
+    if (draft === undefined) {
+      pending.delete(adminId);
+      return;
+    }
+    // Берём самый крупный размер (последний в массиве PhotoSize).
+    const sizes = ctx.message.photo;
+    const fileId = sizes[sizes.length - 1]?.file_id;
+    if (fileId === undefined) {
+      await ctx.reply("Не вижу фото — пришли картинку ещё раз.");
+      return;
+    }
+    draft.photoFileId = fileId;
+    draft.pexelsQuery = null;
+    pending.set(adminId, { kind: "npDateTime" });
+    const channel = await resolvePostingChannelSelected(deps);
+    await sendScreen(ctx, renderNewPostPrompt(dateTimePromptText(channel?.timezone)));
   });
 
   return composer;
+}
+
+/** Текст шага «когда опубликовать» с поясом канала (Шаг 6c). */
+function dateTimePromptText(timezone: string | undefined): string {
+  const zone = timezone ?? "пояс канала";
+  return (
+    "🗓 Когда опубликовать?\n\n" +
+    `Пришли дату и время: ДД.ММ ЧЧ:ММ или ДД.ММ.ГГГГ ЧЧ:ММ (пояс ${zone}). ` +
+    "Например: 01.07 10:00."
+  );
 }
 
 /** Отправляет экран новым сообщением (после ввода текста). */
@@ -190,6 +243,7 @@ async function routeCallback(
   ctx: Context,
   deps: AdminDeps,
   pending: Map<number, PendingInput>,
+  drafts: Map<number, NewPostDraft>,
   action: string,
   args: readonly string[],
 ): Promise<void> {
@@ -643,6 +697,162 @@ async function routeCallback(
       return;
     }
 
+    // ─── Мастер «Новый пост» (разовый, Шаг 6c) ───────────────────────────────
+    case "np": {
+      drafts.set(adminId, { choices: [], pexelsQuery: null, photoFileId: null });
+      pending.set(adminId, { kind: "npTitle" });
+      await editScreen(
+        ctx,
+        renderNewPostPrompt("📝 Новый разовый пост.\n\nПришли заголовок поста."),
+      );
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "npit": {
+      const code = intArg(args, 0);
+      const type = code === null ? undefined : newPostInteractiveByCode(code);
+      const draft = drafts.get(adminId);
+      if (type === undefined || draft === undefined) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      draft.interactiveType = type;
+      if (type === "button_choice") {
+        pending.set(adminId, { kind: "npChoice" });
+        await editScreen(ctx, renderNewPostChoices(draft));
+      } else if (type === "button_prediction") {
+        pending.delete(adminId);
+        await editScreen(ctx, await renderNewPostPools(deps));
+      } else {
+        // keyword_trigger / vote_123 — кнопок под постом нет, сразу к фото.
+        pending.delete(adminId);
+        await editScreen(ctx, renderNewPostPhoto());
+      }
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "npcd": {
+      const draft = drafts.get(adminId);
+      if (draft === undefined) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      if (draft.choices.length === 0) {
+        await ctx.answerCallbackQuery({ text: "Добавь хотя бы один вариант." });
+        return;
+      }
+      pending.delete(adminId);
+      await editScreen(ctx, renderNewPostPhoto());
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "nppl": {
+      const idx = intArg(args, 0);
+      const draft = drafts.get(adminId);
+      if (idx === null || draft === undefined) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const key = await buttonPoolKeyAt(deps, idx);
+      if (key === undefined) {
+        await editScreen(ctx, await renderNewPostPools(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      pending.set(adminId, { kind: "npBtnLabel", poolKey: key });
+      await editScreen(
+        ctx,
+        renderNewPostPrompt(
+          `🔮 Пул «${key}» выбран.\n\nПришли подпись для кнопки (что увидит подписчик).`,
+        ),
+      );
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "npph": {
+      const code = intArg(args, 0);
+      const draft = drafts.get(adminId);
+      if (code === null || draft === undefined) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      if (code === 0) {
+        pending.set(adminId, { kind: "npPexels" });
+        await editScreen(
+          ctx,
+          renderNewPostPrompt(
+            "🔎 Пришли запрос для подбора фото в Pexels (например: tarot cards candles).",
+          ),
+        );
+      } else if (code === 1) {
+        pending.set(adminId, { kind: "npPhotoUp" });
+        await editScreen(
+          ctx,
+          renderNewPostPrompt("📤 Пришли фото одним сообщением (как картинку)."),
+        );
+      } else {
+        draft.pexelsQuery = null;
+        draft.photoFileId = null;
+        pending.set(adminId, { kind: "npDateTime" });
+        const channel = await resolvePostingChannelSelected(deps);
+        await editScreen(ctx, renderNewPostPrompt(dateTimePromptText(channel?.timezone)));
+      }
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "npsave": {
+      const draft = drafts.get(adminId);
+      const channel = await resolvePostingChannelSelected(deps);
+      if (
+        draft === undefined ||
+        channel === null ||
+        draft.title === undefined ||
+        draft.text === undefined ||
+        draft.cta === undefined ||
+        draft.interactiveType === undefined ||
+        draft.publishAt === undefined
+      ) {
+        drafts.delete(adminId);
+        pending.delete(adminId);
+        await editScreen(ctx, await renderPlan(deps));
+        await ctx.answerCallbackQuery({ text: "Черновик неполон — начни заново." });
+        return;
+      }
+      const externalId = await createOneOffPost(deps.prisma, channel.id, {
+        title: draft.title,
+        text: draft.text,
+        cta: draft.cta,
+        interactiveType: draft.interactiveType,
+        choices: draft.interactiveType === "button_choice" ? draft.choices : null,
+        button: draft.button ?? null,
+        pexelsQuery: draft.pexelsQuery,
+        photoFileId: draft.photoFileId,
+        publishAt: draft.publishAt,
+      });
+      drafts.delete(adminId);
+      pending.delete(adminId);
+      deps.logger.info(
+        { channelId: channel.id, externalId, publishAt: draft.publishAt.toISOString() },
+        "разовый пост запланирован",
+      );
+      await editScreen(ctx, await renderPlan(deps));
+      await ctx.answerCallbackQuery({ text: "✅ Запланировано" });
+      return;
+    }
+
+    case "npx": {
+      drafts.delete(adminId);
+      pending.delete(adminId);
+      await editScreen(ctx, await renderPlan(deps));
+      await ctx.answerCallbackQuery({ text: "Отменено" });
+      return;
+    }
+
     case "bpl":
       await editScreen(ctx, await renderButtonPools(deps));
       await ctx.answerCallbackQuery();
@@ -778,6 +988,7 @@ async function handleInput(
   ctx: Context,
   deps: AdminDeps,
   pending: Map<number, PendingInput>,
+  drafts: Map<number, NewPostDraft>,
   state: PendingInput,
   text: string,
 ): Promise<void> {
@@ -949,6 +1160,153 @@ async function handleInput(
       pending.delete(deps.adminId);
       await ctx.reply(ok ? "✅ Ответ изменён." : "⚠️ Ответ не найден (возможно, удалён).");
       await sendScreen(ctx, await renderButtonPoolByKey(deps, state.poolKey));
+      return;
+    }
+
+    // ─── Мастер «Новый пост» (текстовые шаги, Шаг 6c) ────────────────────────
+    case "npTitle": {
+      const result = validatePostField(text, "title");
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+        return;
+      }
+      const draft = drafts.get(deps.adminId);
+      if (draft === undefined) {
+        pending.delete(deps.adminId);
+        return;
+      }
+      draft.title = result.value;
+      pending.set(deps.adminId, { kind: "npText" });
+      await sendScreen(
+        ctx,
+        renderNewPostPrompt("Заголовок принят. Пришли основной текст поста."),
+      );
+      return;
+    }
+
+    case "npText": {
+      const result = validatePostField(text, "text");
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+        return;
+      }
+      const draft = drafts.get(deps.adminId);
+      if (draft === undefined) {
+        pending.delete(deps.adminId);
+        return;
+      }
+      draft.text = result.value;
+      pending.set(deps.adminId, { kind: "npCta" });
+      await sendScreen(ctx, renderNewPostPrompt("Текст принят. Пришли призыв к действию (CTA)."));
+      return;
+    }
+
+    case "npCta": {
+      const result = validatePostField(text, "cta");
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+        return;
+      }
+      const draft = drafts.get(deps.adminId);
+      if (draft === undefined) {
+        pending.delete(deps.adminId);
+        return;
+      }
+      draft.cta = result.value;
+      pending.delete(deps.adminId);
+      await sendScreen(ctx, renderNewPostInteractive());
+      return;
+    }
+
+    case "npChoice": {
+      const sep = text.indexOf("|");
+      if (sep === -1) {
+        await ctx.reply("⚠️ Формат: «метка | ответ». Попробуй ещё раз.");
+        return;
+      }
+      const label = text.slice(0, sep).trim();
+      if (label.length === 0 || label.length > 60) {
+        await ctx.reply("⚠️ Метка кнопки: 1–60 символов.");
+        return;
+      }
+      const answer = validateAnswer(text.slice(sep + 1));
+      if (!answer.ok) {
+        await ctx.reply(`⚠️ ${answer.error}`);
+        return;
+      }
+      const draft = drafts.get(deps.adminId);
+      if (draft === undefined) {
+        pending.delete(deps.adminId);
+        return;
+      }
+      draft.choices.push({ label, answer: answer.value });
+      await sendScreen(ctx, renderNewPostChoices(draft)); // остаёмся в цикле
+      return;
+    }
+
+    case "npBtnLabel": {
+      const label = text.trim();
+      if (label.length === 0 || label.length > 60) {
+        await ctx.reply("⚠️ Подпись кнопки: 1–60 символов.");
+        return;
+      }
+      const draft = drafts.get(deps.adminId);
+      if (draft === undefined) {
+        pending.delete(deps.adminId);
+        return;
+      }
+      draft.button = { type: state.poolKey, label };
+      pending.delete(deps.adminId);
+      await sendScreen(ctx, renderNewPostPhoto());
+      return;
+    }
+
+    case "npPexels": {
+      const query = text.trim();
+      if (query.length === 0 || query.length > 100) {
+        await ctx.reply("⚠️ Запрос для фото: 1–100 символов.");
+        return;
+      }
+      const draft = drafts.get(deps.adminId);
+      if (draft === undefined) {
+        pending.delete(deps.adminId);
+        return;
+      }
+      draft.pexelsQuery = query;
+      draft.photoFileId = null;
+      pending.set(deps.adminId, { kind: "npDateTime" });
+      const posting = await resolvePostingChannelSelected(deps);
+      await sendScreen(ctx, renderNewPostPrompt(dateTimePromptText(posting?.timezone)));
+      return;
+    }
+
+    case "npPhotoUp": {
+      // Фото ждём картинкой (ловит message:photo). Текст на этом шаге — подсказка.
+      await ctx.reply("Пришли фото картинкой (не текстом) или нажми «Отмена».");
+      return;
+    }
+
+    case "npDateTime": {
+      const posting = await resolvePostingChannelSelected(deps);
+      if (posting === null) {
+        pending.delete(deps.adminId);
+        drafts.delete(deps.adminId);
+        await sendScreen(ctx, await renderMain(deps));
+        return;
+      }
+      const result = validateDateTime(text, posting.timezone, new Date());
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}`);
+        return;
+      }
+      const draft = drafts.get(deps.adminId);
+      if (draft === undefined) {
+        pending.delete(deps.adminId);
+        return;
+      }
+      draft.publishAt = result.value;
+      pending.delete(deps.adminId);
+      await sendScreen(ctx, renderNewPostPreview(draft, posting.timezone));
       return;
     }
   }

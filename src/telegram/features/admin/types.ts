@@ -2,6 +2,8 @@ import type { InlineKeyboard } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../../../db/client.js";
 import type { MtprotoConfig } from "../../../services/analytics/mtprotoConfig.js";
+import type { InteractiveType } from "../../../db/repositories/postRepository.js";
+import type { Button, Choice } from "../../../core/content/postSchema.js";
 
 /**
  * Меню админа (Шаг 3) — изолированный Composer `adminMenu`. Порт `cmd_menu` /
@@ -53,4 +55,31 @@ export type PendingInput =
       readonly kind: "editButtonAnswer";
       readonly poolKey: string;
       readonly index: number;
-    };
+    }
+  // Шаг 6c — мастер «Новый пост» (разовая публикация по дате-времени). Сами данные
+  // копятся в NewPostDraft; здесь — лишь маркер «какой ввод ждём на текущем шаге».
+  | { readonly kind: "npTitle" }
+  | { readonly kind: "npText" }
+  | { readonly kind: "npCta" }
+  | { readonly kind: "npChoice" } // ввод пары «метка | ответ» (цикл button_choice)
+  | { readonly kind: "npBtnLabel"; readonly poolKey: string } // подпись кнопки-предсказания
+  | { readonly kind: "npPexels" } // текстовый запрос для подбора фото
+  | { readonly kind: "npPhotoUp" } // ждём присланное фото
+  | { readonly kind: "npDateTime" }; // дата-время публикации
+
+/**
+ * Черновик разового поста, пока админ идёт по мастеру (Шаг 6c). Эфемерный (in-memory
+ * Map, как PendingInput) — теряется при рестарте. Поля заполняются по шагам; на
+ * сохранении превращается в NewOneOffPost репозитория.
+ */
+export interface NewPostDraft {
+  title?: string;
+  text?: string;
+  cta?: string;
+  interactiveType?: InteractiveType;
+  choices: Choice[]; // button_choice — накопленные варианты
+  button?: Button; // button_prediction — {type=ключ пула, label}
+  pexelsQuery: string | null;
+  photoFileId: string | null;
+  publishAt?: Date;
+}
