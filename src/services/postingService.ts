@@ -2,9 +2,12 @@ import { type Api, GrammyError, InlineKeyboard, InputFile } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../db/client.js";
 import {
+  getDueOneOffPosts,
   getPostInteractive,
   getPostsForDay,
   getPostToPublish,
+  markOneOffPublished,
+  type DueOneOffPost,
   type PostToPublish,
 } from "../db/repositories/postRepository.js";
 import { buildPostKeyboard } from "./postButtons.js";
@@ -277,6 +280,74 @@ export async function publishDuePostsForChannel(
     }
   }
   await saveProgress(prisma, channel.id, { date: today.isoDate, postedTimes: posted });
+}
+
+// ─── Разовый пост вне расписания (Шаг 6c) ─────────────────────────────────────
+
+/**
+ * Публикует один разовый пост в его канал. Минует одобрение: админ уже видел
+ * предпросмотр в мастере, а в момент X его может не быть на месте. Помечает пост
+ * опубликованным ТОЛЬКО после успешной отправки (иначе следующий тик повторит).
+ */
+async function publishOneOffPost(
+  deps: PostingDeps,
+  post: DueOneOffPost,
+): Promise<void> {
+  const channel = await getPostingChannelById(deps.prisma, post.channelId);
+  if (channel === null) {
+    // Канал удалён — пост уже не доставить; помечаем, чтобы не зацикливаться.
+    await markOneOffPublished(deps.prisma, post.channelId, post.externalId);
+    deps.logger.warn(
+      { channelId: post.channelId, externalId: post.externalId },
+      "разовый пост: канал не найден — отмечен опубликованным без отправки",
+    );
+    return;
+  }
+  if (channel.chatId === null) {
+    // Цель ещё не задана — НЕ помечаем, чтобы опубликовать, когда канал укажут.
+    deps.logger.warn(
+      { channelId: post.channelId, externalId: post.externalId },
+      "разовый пост: канал публикации не задан — отложено",
+    );
+    return;
+  }
+  const photo = await resolvePhoto(deps, channel.id, photoSourcesOf(post));
+  await sendPost(
+    deps,
+    channel.chatId,
+    buildPostMessage(post),
+    photo,
+    postKeyboard(channel.id, post),
+  );
+  await markOneOffPublished(deps.prisma, post.channelId, post.externalId);
+  deps.logger.info(
+    { channelId: channel.id, externalId: post.externalId },
+    "разовый пост опубликован",
+  );
+  await notifyAdmin(deps, `✅ Разовый пост опубликован в ${channel.title}.`);
+}
+
+/**
+ * Тик планировщика (Шаг 6c): публикует все разовые посты, которым настало время
+ * (`publishAt <= now`, ещё не опубликованы). Ошибка одного поста изолирована и не
+ * роняет остальные; об ошибке уведомляем админа.
+ */
+export async function publishDueOneOffPosts(deps: PostingDeps): Promise<void> {
+  const due = await getDueOneOffPosts(deps.prisma, new Date());
+  for (const post of due) {
+    try {
+      await publishOneOffPost(deps, post);
+    } catch (err) {
+      deps.logger.error(
+        { err, channelId: post.channelId, externalId: post.externalId },
+        "ошибка публикации разового поста",
+      );
+      await notifyAdmin(
+        deps,
+        `⚠️ Не удалось опубликовать разовый пост (#${String(post.externalId)}). Подробности в логах.`,
+      );
+    }
+  }
 }
 
 // ─── Одобрение постов (Шаг 5) + фото-превью (Шаг 6a) ──────────────────────────

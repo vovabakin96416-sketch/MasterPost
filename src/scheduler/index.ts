@@ -1,5 +1,9 @@
 import { Cron } from "croner";
-import { publishDuePosts, type PostingDeps } from "../services/postingService.js";
+import {
+  publishDueOneOffPosts,
+  publishDuePosts,
+  type PostingDeps,
+} from "../services/postingService.js";
 
 /**
  * Планировщик автопостинга (Шаг 4) — замена APScheduler.
@@ -24,6 +28,7 @@ export function startScheduler(deps: PostingDeps): Scheduler {
     },
     async () => {
       await publishDuePosts(deps);
+      await publishDueOneOffPosts(deps);
     },
   );
   deps.logger.info("планировщик автопостинга запущен (тик раз в минуту)");
