@@ -61,10 +61,16 @@ export function buildPostMessage(post: PostSnapshot): string {
 
 /** Источники фото поста (для `resolvePhoto`) из строки контент-плана. */
 function photoSourcesOf(post: PostToPublish): {
+  photoUrl: string | null;
   pexelsQuery: string | null;
   photoPath: string | null;
 } {
-  return { pexelsQuery: post.pexelsQuery, photoPath: post.photoPath };
+  // photoFileId (своё загруженное фото, Шаг 6c) идёт как photoUrl — высший приоритет.
+  return {
+    photoUrl: post.photoFileId,
+    pexelsQuery: post.pexelsQuery,
+    photoPath: post.photoPath,
+  };
 }
 
 /** Клавиатура кнопок поста (Шаг 6b) из его интерактива; `undefined` — без кнопок. */

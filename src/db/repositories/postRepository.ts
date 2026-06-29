@@ -31,6 +31,7 @@ export interface PostToPublish extends PostInteractive {
   cta: string;
   pexelsQuery: string | null; // запрос для подбора фото (Шаг 6a)
   photoPath: string | null; // локальный файл из контент-плана (Шаг 6a)
+  photoFileId: string | null; // своё загруженное фото (Telegram file_id, Шаг 6c)
 }
 
 /** Защитный разбор Json-поля `choices` в типизированные варианты (битое → null). */
@@ -59,7 +60,7 @@ export async function getPostsForDay(
   day: Weekday,
 ): Promise<PostToPublish[]> {
   const rows = await prisma.post.findMany({
-    where: { channelId, week, day },
+    where: { channelId, week, day, oneOff: false },
     select: {
       externalId: true,
       title: true,
@@ -67,6 +68,7 @@ export async function getPostsForDay(
       cta: true,
       pexelsQuery: true,
       photoPath: true,
+      photoFileId: true,
       interactiveType: true,
       choices: true,
       button: true,
@@ -99,6 +101,7 @@ export async function getPostToPublish(
       cta: true,
       pexelsQuery: true,
       photoPath: true,
+      photoFileId: true,
       interactiveType: true,
       choices: true,
       button: true,
@@ -189,7 +192,7 @@ export async function getPlanOverview(
   channelId: string,
 ): Promise<PlanWeek[]> {
   const rows = await prisma.post.findMany({
-    where: { channelId },
+    where: { channelId, oneOff: false },
     select: { week: true },
   });
   const counts = new Map<number, number>();
@@ -221,7 +224,7 @@ export async function getPostsForWeek(
   week: number,
 ): Promise<PlanPostRow[]> {
   return prisma.post.findMany({
-    where: { channelId, week },
+    where: { channelId, week, oneOff: false },
     select: {
       externalId: true,
       day: true,
@@ -331,5 +334,119 @@ export async function upsertPost(
     where: { channelId_externalId: { channelId, externalId: seed.externalId } },
     create: data,
     update: data,
+  });
+}
+
+// ─── Разовый пост вне расписания (Шаг 6c) ─────────────────────────────────────
+
+/** Данные нового разового поста из мастера меню (Шаг 6c). */
+export interface NewOneOffPost {
+  title: string;
+  text: string;
+  cta: string;
+  interactiveType: InteractiveType;
+  choices: Choice[] | null; // button_choice
+  button: Button | null; // button_prediction
+  pexelsQuery: string | null;
+  photoFileId: string | null; // своё загруженное фото (Telegram file_id)
+  publishAt: Date;
+}
+
+/** Разовый пост, которому пора публиковаться (тик планировщика, Шаг 6c). */
+export interface DueOneOffPost extends PostToPublish {
+  channelId: string;
+}
+
+/** Следующий свободный `externalId` для канала (max+1; для первого поста — 1). */
+export async function nextExternalId(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<number> {
+  const agg = await prisma.post.aggregate({
+    where: { channelId },
+    _max: { externalId: true },
+  });
+  return (agg._max.externalId ?? 0) + 1;
+}
+
+/**
+ * Создаёт разовый пост (`oneOff: true`) с собственным `externalId`. `week`/`day`/
+ * `slot`/`time` — плейсхолдеры: в недельной выдаче строка не участвует (фильтр
+ * `oneOff: false`), публикует её планировщик по `publishAt`. Возвращает `externalId`.
+ */
+export async function createOneOffPost(
+  prisma: PrismaClient,
+  channelId: string,
+  post: NewOneOffPost,
+): Promise<number> {
+  const externalId = await nextExternalId(prisma, channelId);
+  await prisma.post.create({
+    data: {
+      channelId,
+      externalId,
+      oneOff: true,
+      publishAt: post.publishAt,
+      week: 0,
+      day: "monday",
+      slot: "morning",
+      time: "00:00",
+      title: post.title,
+      text: post.text,
+      cta: post.cta,
+      interactiveType: post.interactiveType,
+      keyword: null,
+      reactions: [],
+      choices: post.choices ?? Prisma.DbNull,
+      button: post.button ?? Prisma.DbNull,
+      pexelsQuery: post.pexelsQuery,
+      photoPath: null,
+      photoFileId: post.photoFileId,
+    },
+  });
+  return externalId;
+}
+
+/**
+ * Разовые посты ВСЕХ каналов, которым пора публиковаться: `oneOff`, ещё не
+ * опубликованы (`publishedAt: null`) и время настало (`publishAt <= now`). Тик
+ * планировщика глобальный — отдаём `channelId`, цель резолвит вызывающий.
+ */
+export async function getDueOneOffPosts(
+  prisma: PrismaClient,
+  now: Date,
+): Promise<DueOneOffPost[]> {
+  const rows = await prisma.post.findMany({
+    where: { oneOff: true, publishedAt: null, publishAt: { lte: now } },
+    select: {
+      channelId: true,
+      externalId: true,
+      title: true,
+      text: true,
+      cta: true,
+      pexelsQuery: true,
+      photoPath: true,
+      photoFileId: true,
+      interactiveType: true,
+      choices: true,
+      button: true,
+    },
+    orderBy: [{ publishAt: "asc" }],
+  });
+  return rows.map((row) => ({
+    ...row,
+    choices: parseChoices(row.choices),
+    button: parseButton(row.button),
+  }));
+}
+
+/** Помечает разовый пост опубликованным (дедуп между тиками планировщика). */
+export async function markOneOffPublished(
+  prisma: PrismaClient,
+  channelId: string,
+  externalId: number,
+): Promise<void> {
+  await prisma.post.updateMany({
+    where: { channelId, externalId },
+    data: { publishedAt: new Date() },
   });
 }

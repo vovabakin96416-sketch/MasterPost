@@ -87,11 +87,20 @@ model Post {
   button          Json? // для button_prediction: {type, label}
   pexelsQuery     String?
   photoPath       String?
+  // Шаг 6c — разовый пост вне недельного плана (публикуется один раз в publishAt).
+  // oneOff=true → строка не участвует в недельной выдаче (фильтр oneOff:false);
+  // week/day/slot у такой строки — плейсхолдеры. photoFileId — своё загруженное фото
+  // (Telegram file_id, имеет высший приоритет источника фото).
+  oneOff          Boolean         @default(false)
+  publishAt       DateTime? // когда опубликовать (только oneOff)
+  publishedAt     DateTime? // когда опубликован (дедуп между тиками планировщика)
+  photoFileId     String?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
   @@unique([channelId, externalId])
   @@index([channelId, week, day, slot])
+  @@index([oneOff, publishedAt, publishAt])
 }
 
 // Пул текстов-предсказаний (замена DEFAULT_TEXTS / texts.json).

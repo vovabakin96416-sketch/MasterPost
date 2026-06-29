@@ -8,6 +8,7 @@
 
 import { normalizeTriggerText } from "../triggers/matchTrigger.js";
 import { parseTime } from "../schedule/times.js";
+import { parseDateTime } from "../schedule/parseDateTime.js";
 
 /** Максимальная длина ответа-предсказания (запас под лимит сообщения Telegram). */
 export const MAX_ANSWER_LENGTH = 3500;
@@ -19,6 +20,11 @@ export type ValidationResult =
 /** Результат валидации числового ввода (кулдаун) — несёт число, а не строку. */
 export type NumberValidationResult =
   | { readonly ok: true; readonly value: number }
+  | { readonly ok: false; readonly error: string };
+
+/** Результат валидации даты-времени (Шаг 6c) — несёт UTC-инстант, а не строку. */
+export type DateValidationResult =
+  | { readonly ok: true; readonly value: Date }
   | { readonly ok: false; readonly error: string };
 
 /** Максимальный кулдаун триггеров в часах (неделя — разумный потолок). */
@@ -147,6 +153,30 @@ export function validateTime(input: string): ValidationResult {
   const mm = minutes % 60;
   const pad = (n: number): string => (n < 10 ? `0${String(n)}` : String(n));
   return { ok: true, value: `${pad(hh)}:${pad(mm)}` };
+}
+
+/**
+ * Проверяет ввод даты-времени публикации разового поста (Шаг 6c): формат
+ * `ДД.ММ ЧЧ:ММ` или `ДД.ММ.ГГГГ ЧЧ:ММ` в поясе канала. Возвращает UTC-инстант.
+ * Отвергает кривой формат / несуществующую дату и время в прошлом (`<= now`).
+ */
+export function validateDateTime(
+  input: string,
+  timeZone: string,
+  now: Date,
+): DateValidationResult {
+  const dt = parseDateTime(input, timeZone, now);
+  if (dt === null) {
+    return {
+      ok: false,
+      error:
+        "Неверная дата/время. Формат: ДД.ММ ЧЧ:ММ или ДД.ММ.ГГГГ ЧЧ:ММ, например 01.07 10:00.",
+    };
+  }
+  if (dt.getTime() <= now.getTime()) {
+    return { ok: false, error: "Это время уже прошло — укажите будущую дату." };
+  }
+  return { ok: true, value: dt };
 }
 
 /**

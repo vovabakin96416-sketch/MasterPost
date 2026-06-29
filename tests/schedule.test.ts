@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import { localDateParts } from "../src/core/schedule/localDate.js";
 import { resolveCampaignDay } from "../src/core/schedule/resolveCampaignDay.js";
 import { dueTimes, parseTime, sortTimes } from "../src/core/schedule/times.js";
+import { parseDateTime } from "../src/core/schedule/parseDateTime.js";
 import {
   validateChannelTarget,
   validateCooldownHours,
+  validateDateTime,
   validateTime,
 } from "../src/core/menu/validation.js";
 
@@ -172,6 +174,62 @@ describe("parseTime / validateTime", () => {
 
   it("validateTime возвращает ошибку на кривой ввод", () => {
     expect(validateTime("99:99").ok).toBe(false);
+  });
+});
+
+describe("parseDateTime", () => {
+  const now = new Date("2026-06-29T12:00:00Z"); // для подстановки года
+
+  it("разбирает явную дату в UTC", () => {
+    const d = parseDateTime("01.07.2026 10:00", "UTC", now);
+    expect(d?.toISOString()).toBe("2026-07-01T10:00:00.000Z");
+  });
+
+  it("трактует стену в поясе канала (МСК = UTC+3)", () => {
+    const d = parseDateTime("01.07.2026 10:00", "Europe/Moscow", now);
+    expect(d?.toISOString()).toBe("2026-07-01T07:00:00.000Z");
+  });
+
+  it("подставляет текущий год, если он опущен", () => {
+    const d = parseDateTime("01.07 10:00", "UTC", now);
+    expect(d?.toISOString()).toBe("2026-07-01T10:00:00.000Z");
+  });
+
+  it("нормализует ведущие нули и пробелы", () => {
+    const d = parseDateTime("  1.7 9:05 ", "UTC", now);
+    expect(d?.toISOString()).toBe("2026-07-01T09:05:00.000Z");
+  });
+
+  it("возвращает null на кривой формат", () => {
+    expect(parseDateTime("2026-07-01", "UTC", now)).toBeNull();
+    expect(parseDateTime("01/07 10:00", "UTC", now)).toBeNull();
+    expect(parseDateTime("01.07 25:00", "UTC", now)).toBeNull();
+    expect(parseDateTime("01.13 10:00", "UTC", now)).toBeNull();
+    expect(parseDateTime("abc", "UTC", now)).toBeNull();
+  });
+
+  it("возвращает null на несуществующую дату (31 февраля)", () => {
+    expect(parseDateTime("31.02.2026 10:00", "UTC", now)).toBeNull();
+  });
+});
+
+describe("validateDateTime", () => {
+  const now = new Date("2026-06-29T12:00:00Z");
+
+  it("принимает будущее время и несёт UTC-инстант", () => {
+    const r = validateDateTime("01.07.2026 10:00", "UTC", now);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.toISOString()).toBe("2026-07-01T10:00:00.000Z");
+    }
+  });
+
+  it("отвергает время в прошлом", () => {
+    expect(validateDateTime("01.01.2026 10:00", "UTC", now).ok).toBe(false);
+  });
+
+  it("отвергает кривой ввод", () => {
+    expect(validateDateTime("вчера", "UTC", now).ok).toBe(false);
   });
 });
 
