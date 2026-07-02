@@ -35,6 +35,23 @@ const MTPROTO_NOT_CONFIGURED = [
 const NO_CHANNEL_TARGET =
   "⚠️ Не задан канал для аналитики. Укажи его в «📅 Автопостинг → 📡 Указать канал».";
 
+const SESSION_REVOKED = [
+  "❌ Сессия MTProto отозвана Telegram — отчёт по просмотрам собрать нельзя.",
+  "",
+  "Что сделать:",
+  "1. Локально выполни `npm run gen-session` (или `npm run gen-session-qr`).",
+  "2. Впиши новую строку в TELEGRAM_SESSION в переменных Railway.",
+  "3. Перезапусти сервис.",
+  "",
+  "⚠️ Не используй одну сессию с двух IP одновременно (локально + Railway) —",
+  "Telegram отзывает ключ.",
+].join("\n");
+
+/** Мёртвая строка-сессия: AUTH_KEY_UNREGISTERED / _DUPLICATED / _INVALID от Telegram. */
+function isSessionRevokedError(err: unknown): boolean {
+  return /AUTH_KEY/i.test(String(err));
+}
+
 /**
  * Подключается под личным аккаунтом, читает метрики постов канала за неделю, сохраняет
  * снимки в БД и собирает текст отчёта. Динамический импорт GramJS — здесь. Соединение
@@ -60,7 +77,9 @@ async function collectReport(
     }
     return buildWeeklyReport(metrics, timezone);
   } finally {
-    await client.disconnect();
+    // Именно destroy(): disconnect() оставляет жить update-loop GramJS, и при
+    // мёртвой сессии он бесконечно спамит тайм-аутами в логи.
+    await client.destroy();
   }
 }
 
@@ -89,6 +108,10 @@ export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
     deps.logger.info("отправлен еженедельный отчёт по просмотрам");
   } catch (err) {
     deps.logger.error({ err }, "ошибка еженедельного отчёта по просмотрам");
+    // Мёртвая сессия сама не оживёт — молчать нельзя, иначе отчёты пропадут навсегда.
+    if (isSessionRevokedError(err)) {
+      await sendToAdmin(deps, SESSION_REVOKED);
+    }
   }
 }
 
@@ -120,7 +143,9 @@ export async function sendWeeklyReportNow(deps: WeeklyReportDeps): Promise<void>
     deps.logger.error({ err }, "ошибка ручного отчёта по просмотрам");
     await sendToAdmin(
       deps,
-      `❌ Не удалось собрать отчёт по просмотрам.\nПричина: ${String(err)}`,
+      isSessionRevokedError(err)
+        ? SESSION_REVOKED
+        : `❌ Не удалось собрать отчёт по просмотрам.\nПричина: ${String(err)}`,
     );
   }
 }

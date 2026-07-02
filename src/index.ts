@@ -80,6 +80,30 @@ async function main(): Promise<void> {
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
 
+  // Глобальный обработчик ошибок хендлеров: один сбой (упала БД на нажатии кнопки
+  // и т.п.) не должен ронять long polling и весь процесс.
+  bot.catch((err) => {
+    logger.error(
+      { err: err.error, update: err.ctx.update.update_id },
+      "ошибка обработки апдейта",
+    );
+  });
+  // Страховка процесса: необработанный reject из фоновых задач — в лог, не в смерть.
+  process.on("unhandledRejection", (err) => {
+    logger.error({ err }, "unhandled rejection");
+  });
+
+  // Синяя кнопка «Menu» у поля ввода: вход в /menu не теряется, даже если
+  // reply-клавиатура «📋 Меню» пропала (она ставится только на /start).
+  try {
+    await bot.api.setMyCommands([
+      { command: "menu", description: "Меню управления" },
+      { command: "start", description: "Перезапуск + кнопка меню" },
+    ]);
+  } catch (err) {
+    logger.error({ err }, "не смог установить список команд бота");
+  }
+
   logger.info("starting bot (long polling)");
   await bot.start({
     onStart: (info) => logger.info({ username: info.username }, "bot started"),
