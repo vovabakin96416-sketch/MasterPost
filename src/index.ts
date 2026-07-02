@@ -110,4 +110,10 @@ async function main(): Promise<void> {
   });
 }
 
-void main();
+// Фатальный сбой (упал long polling, напр. 409 «другой getUpdates») — выходим с
+// ошибкой, чтобы хостинг перезапустил процесс. Иначе процесс живёт «зомби»:
+// health-сервер держит его, а апдейты бот уже не читает.
+main().catch((err: unknown) => {
+  console.error("фатальная ошибка запуска бота:", err);
+  process.exit(1);
+});
