@@ -30,6 +30,7 @@ import {
 import { getBooleanSetting } from "../../../db/repositories/settingRepository.js";
 import { buildPostMessage } from "../../../services/postingService.js";
 import type { InteractiveType } from "../../../db/repositories/postRepository.js";
+import { pluralRu } from "../../../core/text/pluralRu.js";
 import { buildKeyboard, navRow, pageRow, preview, type Btn } from "./keyboard.js";
 import type { AdminDeps, NewPostDraft, Screen } from "./types.js";
 
@@ -55,70 +56,48 @@ const PAGE_POSTS = 8;
 /** Ключ настройки «отвечать в комментах» (как в Шаге 2). */
 const COMMENTS_KEY = "comments_enabled";
 
-/** Русское склонение «ответ / ответа / ответов». */
-function pluralAnswers(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) {
-    return "ответ";
-  }
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
-    return "ответа";
-  }
-  return "ответов";
-}
-
-/** Русское склонение «пост / поста / постов». */
-function pluralPosts(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) {
-    return "пост";
-  }
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
-    return "поста";
-  }
-  return "постов";
-}
+/** Склонения слов меню — формы к общему правилу `pluralRu`. */
+const pluralAnswers = (n: number): string => pluralRu(n, ["ответ", "ответа", "ответов"]);
+const pluralPosts = (n: number): string => pluralRu(n, ["пост", "поста", "постов"]);
+const pluralDays = (n: number): string => pluralRu(n, ["день", "дня", "дней"]);
 
 /** Усечение многострочного текста для показа в экране (новые строки сохраняем). */
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
-/** Русское склонение «день / дня / дней». */
-function pluralDays(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) {
-    return "день";
-  }
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
-    return "дня";
-  }
-  return "дней";
-}
-
-/**
- * Раздел главного меню. `soon: true` — задел под будущие функции (Шаги 4/5/11):
- * кнопка видна, но ведёт на заглушку-тост. Новый раздел = одна запись здесь.
- */
+/** Раздел главного меню (кнопка + callback). Новый раздел = одна запись здесь. */
 interface Section {
   readonly label: string;
   readonly data: string;
 }
 
-export const MAIN_SECTIONS: readonly Section[] = [
-  { label: "📡 Каналы", data: encodeCb("ch") },
-  { label: "💬 Триггеры", data: encodeCb("trg", 0) },
-  { label: "⚙️ Настройки", data: encodeCb("set") },
-  { label: "📊 Статус", data: encodeCb("stat") },
-  { label: "📅 Автопостинг", data: encodeCb("auto") },
-  { label: "📋 Одобрение постов", data: encodeCb("appr") },
-  { label: "🗂 Контент-план", data: encodeCb("plan") },
-  { label: "🔘 Кнопки под постами", data: encodeCb("bpl") },
-  { label: "📊 Аналитика", data: encodeCb("an") },
-  { label: "⏳ AI-ответы (скоро)", data: encodeCb("soon") },
+/**
+ * Главное меню — РЯДЫ по 2 кнопки, сгруппированные по смыслу (частое — сверху):
+ * контент → публикация → комменты → канал → сводки. Кнопки-заглушки «скоро»
+ * на главную не выносим (строка про AI-ответы живёт в «⚙️ Настройки»).
+ */
+export const MAIN_SECTIONS: readonly (readonly Section[])[] = [
+  [
+    { label: "🗂 Контент-план", data: encodeCb("plan") },
+    { label: "➕ Новый пост", data: encodeCb("np") },
+  ],
+  [
+    { label: "📅 Автопостинг", data: encodeCb("auto") },
+    { label: "📋 Одобрение", data: encodeCb("appr") },
+  ],
+  [
+    { label: "💬 Триггеры", data: encodeCb("trg", 0) },
+    { label: "🔘 Кнопки постов", data: encodeCb("bpl") },
+  ],
+  [
+    { label: "📡 Каналы", data: encodeCb("ch") },
+    { label: "⚙️ Настройки", data: encodeCb("set") },
+  ],
+  [
+    { label: "📊 Статус", data: encodeCb("stat") },
+    { label: "📈 Аналитика", data: encodeCb("an") },
+  ],
 ];
 
 /** Дни недели по-русски для экрана автопостинга. */
@@ -159,11 +138,18 @@ const POST_FIELD_RU: Record<EditablePostField, string> = {
   cta: "Призыв (CTA)",
 };
 
-/** Экран-заглушка, когда активного канала нет (не запущен сид). */
+/** Экран-заглушка, когда канала нет: ведём владельца добавить канал, не в консоль. */
 function noChannelScreen(): Screen {
   return {
-    text: "Активный канал не найден. Запусти сид: `npm run seed`.",
-    keyboard: buildKeyboard([navRow()]),
+    text:
+      "Канал пока не подключён.\n\n" +
+      "Сначала добавь канал: «📡 Каналы → ➕ Добавить канал» — или просто добавь бота " +
+      "админом в свой канал, он подключится сам.\n" +
+      "(Для разработчика: тестовые данные заливает `npm run seed`.)",
+    keyboard: buildKeyboard([
+      [{ label: "📡 Каналы", data: encodeCb("ch") }],
+      navRow(),
+    ]),
   };
 }
 
@@ -182,9 +168,13 @@ export async function renderMain(deps: AdminDeps): Promise<Screen> {
   const header = current
     ? `📡 Канал: ${channelLabel(current)}`
     : "📡 Канал не выбран — добавь в разделе «Каналы».";
-  const rows = MAIN_SECTIONS.map((s): Btn[] => [{ label: s.label, data: s.data }]);
+  const rows = MAIN_SECTIONS.map((row): Btn[] =>
+    row.map((s) => ({ label: s.label, data: s.data })),
+  );
   return {
-    text: `🤖 Меню управления\n\n${header}\n\nВыбери раздел:`,
+    text:
+      `🤖 Меню управления\n\n${header}\n\n` +
+      "Сверху — контент и публикация, ниже — ответы в комментах, каналы и сводки:",
     keyboard: buildKeyboard(rows),
   };
 }
@@ -233,7 +223,7 @@ export async function renderChannelDetail(
     `Канал публикации: ${channel.chatId ?? "не задан ⚠️"}`,
     `Активность: ${channel.isActive ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
     isCurrent ? "\nЭто текущий канал — им управляют все разделы меню." : "",
-    "\nℹ️ Автопостинг и ответы в комментах сейчас ведёт только первый канал; мультиканальный рантайм — следующий подшаг (8b/8c).",
+    "\nℹ️ Каждый активный канал бот ведёт сам: автопостинг и ответы в комментах работают по его настройкам и цели публикации.",
   ];
 
   const rows: Btn[][] = [];
@@ -549,7 +539,7 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
         data: encodeCb("atgl"),
       },
     ],
-    [{ label: "📡 Указать канал", data: encodeCb("achan") }],
+    [{ label: "🎯 Канал публикации", data: encodeCb("achan") }],
   ];
   // По строке на каждое время — нажатие удаляет его.
   config.times.forEach((t, i) => {
@@ -670,7 +660,7 @@ export function renderSetCooldownPrompt(): Screen {
 export function renderSetChannelPrompt(): Screen {
   return {
     text:
-      "📡 Канал публикации\n\nПришли @username канала (например, @supertestmaster), " +
+      "🎯 Канал публикации\n\nПришли @username канала (например, @supertestmaster), " +
       "ссылку t.me/… или числовой id канала.\n\n" +
       "⚠️ Бот должен быть админом этого канала с правом публикации.",
     keyboard: buildKeyboard([navRow(encodeCb("auto"))]),

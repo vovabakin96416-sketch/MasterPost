@@ -1319,7 +1319,7 @@ function previewResultText(result: PreviewNowResult): string {
   }
   switch (result.reason) {
     case "no_channel":
-      return "Канал не найден. Запусти сид: npm run seed.";
+      return "Канал не найден (возможно, удалён). Открой «📡 Каналы».";
     case "no_post":
       return "Пост не найден (возможно, удалён).";
   }

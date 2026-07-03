@@ -314,8 +314,8 @@ function publishFailText(result: Extract<PublishPendingResult, { ok: false }>): 
     case "not_found":
       return "Пост уже обработан или не найден.";
     case "no_channel":
-      return "Активный канал не найден. Запусти сид: npm run seed.";
+      return "Канал этого поста не найден (возможно, удалён). Открой «📡 Каналы».";
     case "no_target":
-      return "Не задан канал публикации. Укажите его в «📅 Автопостинг → 📡 Указать канал».";
+      return "Не задан канал публикации. Укажи его в «📅 Автопостинг → 🎯 Канал публикации».";
   }
 }
