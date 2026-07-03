@@ -31,6 +31,7 @@ export function startAnalyticsScheduler(deps: WeeklyReportDeps): Scheduler {
     {
       name: "content-ending-check",
       timezone: ANALYTICS_TZ,
+      protect: true, // не наслаивать тик на ещё идущий предыдущий
       catch: (err: unknown) =>
         deps.logger.error({ err }, "ошибка джоба напоминания о конце контента"),
     },
@@ -44,6 +45,7 @@ export function startAnalyticsScheduler(deps: WeeklyReportDeps): Scheduler {
     {
       name: "weekly-views-report",
       timezone: ANALYTICS_TZ,
+      protect: true, // MTProto-сбор может идти долго — не наслаивать повторный тик
       catch: (err: unknown) =>
         deps.logger.error({ err }, "ошибка джоба отчёта по просмотрам"),
     },

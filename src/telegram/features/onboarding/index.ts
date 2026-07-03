@@ -32,6 +32,16 @@ export function createOnboardingComposer(deps: OnboardingDeps): Composer<Context
     if (chat.type !== "channel") {
       return;
     }
+    // Бот публичный: добавить его админом в канал может кто угодно. Регистрируем
+    // канал (и шлём DM) только когда права менял сам владелец — чужие каналы не
+    // должны попадать в реестр и путать меню.
+    if (upd.from.id !== deps.adminId) {
+      deps.logger.warn(
+        { chatId: chat.id, title: chat.title, byUserId: upd.from.id },
+        "онбординг: изменение членства не от владельца — игнорирую",
+      );
+      return;
+    }
 
     const change = classifyBotMembership(
       upd.old_chat_member.status,

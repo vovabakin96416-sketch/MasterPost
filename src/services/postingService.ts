@@ -276,10 +276,16 @@ export async function publishDuePostsForChannel(
     } catch (err) {
       logger.error({ err, time }, "ошибка публикации");
     } finally {
+      // Прогресс пишем после КАЖДОГО времени, а не одним куском после цикла:
+      // рестарт/redeploy посреди цикла не должен повторно публиковать уже
+      // отправленные посты следующим тиком.
       posted.push(time);
+      await saveProgress(prisma, channel.id, {
+        date: today.isoDate,
+        postedTimes: posted,
+      });
     }
   }
-  await saveProgress(prisma, channel.id, { date: today.isoDate, postedTimes: posted });
 }
 
 // ─── Разовый пост вне расписания (Шаг 6c) ─────────────────────────────────────

@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { autoRetry } from "@grammyjs/auto-retry";
 import { parseEnv } from "./config/env.js";
 import { createLogger } from "./lib/logger.js";
 import { createPrismaClient } from "./db/client.js";
@@ -49,6 +50,10 @@ async function main(): Promise<void> {
     pexelsApiKey: env.PEXELS_API_KEY,
     mtproto,
   });
+
+  // Авто-повтор при лимитах Telegram (429 retry_after) и транзиентных сетевых
+  // сбоях: без него пост/превью просто теряется с ошибкой в логе.
+  bot.api.config.use(autoRetry());
 
   // Шаг 4: планировщик автопостинга (тик раз в минуту через bot.api).
   const scheduler = startScheduler({

@@ -1,11 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GrammyError, type Api } from "grammy";
 import type { Logger } from "pino";
 import {
+  publishDuePostsForChannel,
   sendApprovalPreview,
   sendPost,
   type PostingDeps,
 } from "../src/services/postingService";
+import type { PostingChannel } from "../src/db/repositories/channelRepository";
 
 /** Тихий логгер-заглушка (без реального pino). */
 const silentLogger = {
@@ -103,5 +105,81 @@ describe("sendApprovalPreview: превью одобрения всегда до
     const notify = sendMessage.mock.calls[2];
     expect(notify[0]).toBe(42);
     expect(String(notify[1])).toContain("Прислать на тест");
+  });
+});
+
+describe("publishDuePostsForChannel: прогресс пишется после каждого времени", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Строка поста в форме `select` из getPostsForDay (без фото и кнопок). */
+  function postRow(externalId: number): Record<string, unknown> {
+    return {
+      externalId,
+      title: `t${String(externalId)}`,
+      text: "x",
+      cta: "c",
+      pexelsQuery: null,
+      photoPath: null,
+      photoFileId: null,
+      interactiveType: "keyword_trigger",
+      choices: null,
+      button: null,
+    };
+  }
+
+  it("ошибка первой публикации не теряет прогресс: upsert после каждого времени", async () => {
+    // Фиксируем «сейчас» (полдень МСК), чтобы оба времени 00:00/00:01 были due.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-03T09:00:00Z"));
+
+    const settings: Record<string, unknown> = {
+      autopost_enabled: true,
+      autopost_times: ["00:00", "00:01"],
+      approval_enabled: false,
+    };
+    const upsert = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      setting: {
+        findUnique: vi.fn(
+          ({ where }: { where: { channelId_key: { key: string } } }) => {
+            const value = settings[where.channelId_key.key];
+            return Promise.resolve(value === undefined ? null : { value });
+          },
+        ),
+        upsert,
+      },
+      post: { findMany: vi.fn().mockResolvedValue([postRow(1), postRow(2)]) },
+    } as unknown as PostingDeps["prisma"];
+
+    // Первый пост падает не-Telegram ошибкой, второй уходит нормально.
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValue(undefined);
+    const deps: PostingDeps = { ...makeDeps({ sendMessage }), prisma };
+    const channel: PostingChannel = {
+      id: "ch1",
+      chatId: "@target",
+      timezone: "Europe/Moscow",
+      campaignStart: null,
+      title: "Тест",
+      username: null,
+    };
+
+    await publishDuePostsForChannel(deps, channel);
+
+    // Раньше прогресс писался одним куском после цикла — рестарт посреди цикла
+    // публиковал уже отправленные посты повторно. Теперь запись после каждого времени.
+    expect(upsert).toHaveBeenCalledTimes(2);
+    const first = upsert.mock.calls[0][0] as {
+      create: { value: { postedTimes: string[] } };
+    };
+    const second = upsert.mock.calls[1][0] as {
+      create: { value: { postedTimes: string[] } };
+    };
+    expect(first.create.value.postedTimes).toEqual(["00:00"]);
+    expect(second.create.value.postedTimes).toEqual(["00:00", "00:01"]);
   });
 });

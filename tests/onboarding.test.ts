@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { Context, type Api } from "grammy";
+import type { Update, UserFromGetMe } from "grammy/types";
+import type { Logger } from "pino";
 import {
   classifyBotMembership,
   evaluateChannelRights,
   extractRights,
 } from "../src/core/onboarding/membership";
+import { createOnboardingComposer } from "../src/telegram/features/onboarding";
 
 describe("classifyBotMembership", () => {
   it("member → administrator = promoted", () => {
@@ -88,5 +92,73 @@ describe("evaluateChannelRights", () => {
     const report = evaluateChannelRights({ isAdmin: false, canPost: false });
     expect(report.isAdmin).toBe(false);
     expect(report.missing).toContain("права администратора");
+  });
+});
+
+describe("композер онбординга: регистрирует канал только от владельца", () => {
+  const ADMIN_ID = 42;
+
+  const silentLogger = {
+    warn: () => undefined,
+    info: () => undefined,
+    error: () => undefined,
+  } as unknown as Logger;
+
+  const botUser = { id: 999, is_bot: true, first_name: "Bot", username: "mp_bot" };
+
+  /** Апдейт «бота повысили до админа канала»; `fromId` — кто менял права. */
+  function promotedUpdate(fromId: number): Update {
+    return {
+      update_id: 1,
+      my_chat_member: {
+        chat: { id: -100555, type: "channel", title: "Канал" },
+        from: { id: fromId, is_bot: false, first_name: "Юзер" },
+        date: 1,
+        old_chat_member: { user: botUser, status: "left" },
+        new_chat_member: {
+          user: botUser,
+          status: "administrator",
+          can_post_messages: true,
+        },
+      },
+    } as unknown as Update;
+  }
+
+  /** Прогоняет апдейт через композер с моками БД/API; возвращает моки для проверок. */
+  async function run(fromId: number): Promise<{
+    findFirst: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
+    sendMessage: ReturnType<typeof vi.fn>;
+  }> {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const create = vi.fn().mockResolvedValue({ id: "c1" });
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const composer = createOnboardingComposer({
+      prisma: { channel: { findFirst, create } } as never,
+      logger: silentLogger,
+      adminId: ADMIN_ID,
+    });
+    const ctx = new Context(
+      promotedUpdate(fromId),
+      { sendMessage } as unknown as Api,
+      botUser as unknown as UserFromGetMe,
+    );
+    await composer.middleware()(ctx, () => Promise.resolve());
+    return { findFirst, create, sendMessage };
+  }
+
+  it("владелец добавил бота → канал зарегистрирован, владельцу ушёл DM", async () => {
+    const { create, sendMessage } = await run(ADMIN_ID);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0][0]).toBe(ADMIN_ID);
+    expect(String(sendMessage.mock.calls[0][1])).toContain("подключён");
+  });
+
+  it("чужой человек добавил бота → игнор: ни записи в БД, ни DM", async () => {
+    const { findFirst, create, sendMessage } = await run(777);
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });

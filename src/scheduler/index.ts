@@ -23,6 +23,9 @@ export function startScheduler(deps: PostingDeps): Scheduler {
     "* * * * *",
     {
       name: "autopost",
+      // Долгий тик (несколько каналов × фото × Telegram) может перевалить за минуту;
+      // без protect croner запустит второй тик параллельно → дубли постов в канале.
+      protect: true,
       catch: (err: unknown) =>
         deps.logger.error({ err }, "ошибка тика планировщика"),
     },
