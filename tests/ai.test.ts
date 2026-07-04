@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "pino";
 import {
   parsePostDraft,
@@ -10,9 +10,11 @@ import {
   type AiTextClient,
 } from "../src/services/ai/aiGenerationService";
 import {
+  buildAiDraft,
   requestAiPostApproval,
   type AiPostApprovalDeps,
 } from "../src/services/ai/aiPostApprovalService";
+import type { PostingChannel } from "../src/db/repositories/channelRepository";
 
 /** Тихий логгер-заглушка (как в media.test.ts). */
 const silentLogger = {
@@ -147,5 +149,46 @@ describe("requestAiPostApproval (Шаг 10b): мягкая деградация"
     const result = await requestAiPostApproval(deps, "ch1");
     expect(result).toEqual({ ok: false, reason: "no_key" });
     expect(touched).toBe(false); // ключ проверяем ДО обращений к БД
+  });
+});
+
+describe("buildAiDraft (10c): сборщик AI-черновика для автопостинга", () => {
+  const channel: PostingChannel = {
+    id: "ch1",
+    chatId: "@target",
+    timezone: "Europe/Moscow",
+    campaignStart: null,
+    title: "Тест",
+    username: null,
+  };
+
+  function makeDeps(
+    anthropicApiKey: string | undefined,
+    prisma: unknown,
+  ): AiPostApprovalDeps {
+    return {
+      prisma: prisma as never,
+      logger: silentLogger,
+      api: {} as never,
+      adminId: 1,
+      pexelsApiKey: undefined,
+      anthropicApiKey,
+    };
+  }
+
+  it("нет ключа → no_key, образцы не запрашиваем", async () => {
+    let touched = false;
+    const prisma = new Proxy({}, { get: () => (touched = true) });
+    const result = await buildAiDraft(makeDeps(undefined, prisma), channel);
+    expect(result).toEqual({ ok: false, reason: "no_key" });
+    expect(touched).toBe(false);
+  });
+
+  it("канал без постов-образцов → no_samples (генерацию не зовём)", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = { post: { findMany } };
+    const result = await buildAiDraft(makeDeps("key", prisma), channel);
+    expect(result).toEqual({ ok: false, reason: "no_samples" });
+    expect(findMany).toHaveBeenCalledTimes(1);
   });
 });

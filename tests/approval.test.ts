@@ -14,6 +14,7 @@ const ACTIONS: readonly ApprovalAction[] = [
   "cancel",
   "reroll",
   "own",
+  "preview",
 ];
 
 describe("approval callback: encode/decode round-trip", () => {

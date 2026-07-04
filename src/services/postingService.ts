@@ -34,6 +34,10 @@ import {
 import { resolvePhoto, refToCacheString } from "./mediaService.js";
 import type { PhotoRef } from "../core/media/types.js";
 import type { PhotoSources } from "../core/media/resolvePriority.js";
+// 10c: AI-подхват автопостинга. Импорт «функция↔функция» с aiPostApprovalService
+// циклический, но безопасный: обе стороны используются только внутри тел функций
+// (не на верхнем уровне модуля), а объявления функций поднимаются (hoisting).
+import { buildAiDraft, type AiDraftFailure } from "./ai/aiPostApprovalService.js";
 
 /**
  * Сервис публикации постов (Шаг 4 / Доработка 4.1 / Шаг 6a — порт `send_post`).
@@ -46,13 +50,17 @@ import type { PhotoSources } from "../core/media/resolvePriority.js";
  * порядку в заданные времена. Индекс поста = число уже опубликованных сегодня.
  */
 
-/** Зависимости публикации: БД, логгер, Telegram API, id админа и ключ Pexels (фото). */
+/**
+ * Зависимости публикации: БД, логгер, Telegram API, id админа, ключ Pexels (фото) и
+ * ключ Anthropic (10c: AI-подхват в автопостинге — генерим пост, если план пуст).
+ */
 export interface PostingDeps {
   prisma: PrismaClient;
   logger: Logger;
   api: Api;
   adminId: number;
   pexelsApiKey: string | undefined;
+  anthropicApiKey: string | undefined;
 }
 
 /** Лимит подписи к фото в Telegram. */
@@ -265,6 +273,10 @@ export async function publishDuePostsForChannel(
           { channelId: channel.id, week, day: today.weekday, time, idx },
           "пост опубликован (авто)",
         );
+      } else if (post === undefined && config.aiEnabled) {
+        // 10c: на слот нет готового поста, но включён AI-подхват — генерим пост
+        // голосом канала. Одобрение подчиняется общему тумблеру (approvalOn).
+        await placeAiFallbackPost(deps, channel, approvalOn, idx === 0);
       } else if (post === undefined && idx === 0) {
         await notifyAdmin(
           deps,
@@ -287,6 +299,58 @@ export async function publishDuePostsForChannel(
       });
     }
   }
+}
+
+/** Сообщение админу, если AI-подхват не смог собрать пост (10c). */
+function aiFallbackFailText(reason: AiDraftFailure, title: string): string {
+  switch (reason) {
+    case "no_key":
+      return `⚠️ AI-подхват включён, но нет ANTHROPIC_API_KEY — пост для «${title}» не сгенерирован. Добавь ключ Anthropic в переменные Railway.`;
+    case "no_samples":
+      return `⚠️ AI-подхват: у канала «${title}» нет постов-образцов — заполни контент-план, чтобы AI перенял стиль.`;
+    case "gen_failed":
+      return `⚠️ AI-подхват: не удалось сгенерировать пост для «${title}» (модель не ответила). Попробую в следующий слот.`;
+  }
+}
+
+/**
+ * 10c: собирает AI-пост голосом канала и помещает его туда же, куда и плановый —
+ * одобрение ВКЛ → в очередь на превью; ВЫКЛ → сразу в канал (цель гарантирована
+ * guard'ом выше по коду). При неудаче генерации уведомляем админа один раз за день
+ * (`notifyOnFail` = первый пустой слот), иначе только лог — чтобы не спамить.
+ */
+async function placeAiFallbackPost(
+  deps: PostingDeps,
+  channel: PostingChannel,
+  approvalOn: boolean,
+  notifyOnFail: boolean,
+): Promise<void> {
+  const built = await buildAiDraft(deps, channel);
+  if (!built.ok) {
+    deps.logger.warn(
+      { channelId: channel.id, reason: built.reason },
+      "AI-подхват автопостинга не удался",
+    );
+    if (notifyOnFail) {
+      await notifyAdmin(deps, aiFallbackFailText(built.reason, channel.title));
+    }
+    return;
+  }
+  if (approvalOn) {
+    await requestApprovalForDraft(deps, channel.id, channel.chatId, built.draft);
+    deps.logger.info(
+      { channelId: channel.id },
+      "AI-пост (автоподхват) отправлен на одобрение",
+    );
+    return;
+  }
+  // Одобрение ВЫКЛ → публикуем сразу. chatId здесь гарантированно задан.
+  if (channel.chatId === null) {
+    return;
+  }
+  const photo = await resolvePhoto(deps, channel.id, built.draft.photoSources);
+  await sendPost(deps, channel.chatId, buildPostMessage(built.draft), photo);
+  deps.logger.info({ channelId: channel.id }, "AI-пост (автоподхват) опубликован");
 }
 
 // ─── Разовый пост вне расписания (Шаг 6c) ─────────────────────────────────────
@@ -481,22 +545,7 @@ export async function publishPending(
   if (channel.chatId === null) {
     return { ok: false, reason: "no_target" };
   }
-  // Кнопки берём из исходного поста контент-плана (у снимка их нет). Если пост
-  // создан не из плана (externalId === null) — публикуем без кнопок.
-  const interactive =
-    pending.externalId === null
-      ? null
-      : await getPostInteractive(deps.prisma, channel.id, pending.externalId);
-  const keyboard =
-    interactive === null
-      ? undefined
-      : buildPostKeyboard({
-          channelId: channel.id,
-          externalId: pending.externalId ?? 0,
-          interactiveType: interactive.interactiveType,
-          choices: interactive.choices,
-          button: interactive.button,
-        });
+  const keyboard = await buildPendingPostKeyboard(deps, channel.id, pending.externalId);
   await sendPost(
     deps,
     channel.chatId,
@@ -506,6 +555,64 @@ export async function publishPending(
   );
   await deletePending(deps.prisma, pendingId);
   deps.logger.info({ pendingId, channelId: channel.id }, "пост опубликован (одобрен)");
+  return { ok: true };
+}
+
+/**
+ * Реальная клавиатура поста из очереди (10c — вынесено из `publishPending`). Кнопки
+ * берём из исходного поста контент-плана (у снимка их нет). Пост не из плана
+ * (`externalId === null`, напр. AI-пост) — без кнопок.
+ */
+async function buildPendingPostKeyboard(
+  deps: PostingDeps,
+  channelId: string,
+  externalId: number | null,
+): Promise<InlineKeyboard | undefined> {
+  if (externalId === null) {
+    return undefined;
+  }
+  const interactive = await getPostInteractive(deps.prisma, channelId, externalId);
+  return interactive === null
+    ? undefined
+    : buildPostKeyboard({
+        channelId,
+        externalId,
+        interactiveType: interactive.interactiveType,
+        choices: interactive.choices,
+        button: interactive.button,
+      });
+}
+
+/** Результат предпросмотра поста из очереди (10c). */
+export type PendingPreviewResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" };
+
+/**
+ * 10c: шлёт админу пост из очереди КАК В КАНАЛЕ — реальное фото, подпись без «шапки
+ * одобрения» и настоящие кнопки поста. Отдельным сообщением: превью одобрения с его
+ * кнопками остаётся на месте. Ничего не публикует и не трогает очередь.
+ */
+export async function sendPendingPreview(
+  deps: PostingDeps,
+  pendingId: string,
+): Promise<PendingPreviewResult> {
+  const pending = await getPending(deps.prisma, pendingId);
+  if (pending === null) {
+    return { ok: false, reason: "not_found" };
+  }
+  const keyboard = await buildPendingPostKeyboard(
+    deps,
+    pending.channelId,
+    pending.externalId,
+  );
+  await sendPost(
+    deps,
+    deps.adminId,
+    buildPostMessage(pending),
+    photoRefFromCache(pending.photoUrl),
+    keyboard,
+  );
   return { ok: true };
 }
 

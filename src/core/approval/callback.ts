@@ -13,8 +13,16 @@ const SEP = ":";
 /**
  * Действия экрана одобрения. Текстовые (Шаг 5): pub/edit/skip/cancel.
  * Фото (Шаг 6a): `reroll` — перевыбрать фото у провайдера, `own` — прислать своё.
+ * 10c: `preview` — показать пост как в канале (с реальными кнопками), не только текст+фото.
  */
-export type ApprovalAction = "pub" | "edit" | "skip" | "cancel" | "reroll" | "own";
+export type ApprovalAction =
+  | "pub"
+  | "edit"
+  | "skip"
+  | "cancel"
+  | "reroll"
+  | "own"
+  | "preview";
 
 const ACTIONS: readonly ApprovalAction[] = [
   "pub",
@@ -23,6 +31,7 @@ const ACTIONS: readonly ApprovalAction[] = [
   "cancel",
   "reroll",
   "own",
+  "preview",
 ];
 
 export interface ApprovalCb {

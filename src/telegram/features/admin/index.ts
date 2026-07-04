@@ -17,6 +17,7 @@ import {
   addTime,
   removeTimeAt,
   toggleAutopost,
+  toggleAiAutopost,
 } from "../../../services/autopostSettings.js";
 import { setCooldownHours } from "../../../services/cooldownSettings.js";
 import {
@@ -450,6 +451,20 @@ async function routeCallback(
       return;
     }
 
+    case "aitgl": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleAiAutopost(deps.prisma, channel.id);
+      await editScreen(ctx, await renderAutopost(deps));
+      await ctx.answerCallbackQuery({
+        text: next ? "AI-подхват включён 🤖" : "AI-подхват выключен",
+      });
+      return;
+    }
+
     case "achan":
       pending.set(adminId, { kind: "setChannel" });
       await editScreen(ctx, renderSetChannelPrompt());
@@ -511,6 +526,7 @@ async function routeCallback(
         api: ctx.api,
         adminId: deps.adminId,
         pexelsApiKey: deps.pexelsApiKey,
+        anthropicApiKey: deps.anthropicApiKey,
       };
       const result = await requestApprovalForPost(postingDeps, channel.id, externalId);
       await ctx.answerCallbackQuery({

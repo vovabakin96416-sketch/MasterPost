@@ -45,8 +45,8 @@ export async function toggleApproval(
 }
 
 /**
- * Клавиатура превью одобрения — 6 кнопок (порт `approval_keyboard`, паритет с
- * Python). Шаг 6a добавил фото-кнопки «🔄 Другое фото» / «🖼 Своё фото».
+ * Клавиатура превью одобрения (порт `approval_keyboard`). Шаг 6a добавил фото-кнопки
+ * «🔄 Другое фото» / «🖼 Своё фото»; 10c — «👀 Предпросмотр» (пост как в канале, с кнопками).
  */
 export function approvalKeyboard(pendingId: string): InlineKeyboard {
   return new InlineKeyboard()
@@ -55,6 +55,8 @@ export function approvalKeyboard(pendingId: string): InlineKeyboard {
     .row()
     .text("✍️ Изменить текст", encodeApproval("edit", pendingId))
     .text("🖼 Своё фото", encodeApproval("own", pendingId))
+    .row()
+    .text("👀 Предпросмотр", encodeApproval("preview", pendingId))
     .row()
     .text("⏭ Не сегодня", encodeApproval("skip", pendingId))
     .text("❌ Отменить", encodeApproval("cancel", pendingId));

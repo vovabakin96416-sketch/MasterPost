@@ -526,12 +526,16 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
     "📅 Автопостинг",
     "",
     `Статус: ${config.enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+    `AI когда план пуст: ${config.aiEnabled ? "ВКЛ 🤖" : "ВЫКЛ 🔇"}`,
     `Канал публикации: ${channel.chatId ?? "не задан ⚠️"}`,
     `Сейчас: неделя ${String(week)}, ${DAY_RU[day] ?? day}`,
     timesLine,
     `Пояс: ${channel.timezone}`,
     "",
     "Бот публикует посты дня по порядку в эти времена.",
+    config.aiEnabled
+      ? "🤖 Если на слот нет готового поста — бот сам напишет пост голосом канала. Показ/публикация подчиняются тумблеру «📋 Одобрение»."
+      : "🤖 Можно включить AI-подхват: если на слот нет готового поста, бот напишет его сам.",
   ];
 
   const rows: Btn[][] = [
@@ -539,6 +543,12 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
       {
         label: config.enabled ? "🔇 Выключить" : "✅ Включить",
         data: encodeCb("atgl"),
+      },
+    ],
+    [
+      {
+        label: config.aiEnabled ? "🔇 Выключить AI-подхват" : "🤖 Включить AI-подхват",
+        data: encodeCb("aitgl"),
       },
     ],
     [{ label: "🎯 Канал публикации", data: encodeCb("achan") }],

@@ -20,6 +20,7 @@ export const AUTOPOST_KEYS = {
   enabled: "autopost_enabled",
   times: "autopost_times", // JSON: ["09:00","13:30","20:00"]
   progress: "autopost_progress", // JSON: { date, postedTimes }
+  aiEnabled: "autopost_ai_enabled", // 10c: AI-подхват, когда на слот нет готового поста
 } as const;
 
 /** Дефолтные времена, если список ни разу не задавали. */
@@ -27,6 +28,9 @@ export const DEFAULT_TIMES: readonly string[] = ["10:00", "20:00"];
 
 /** По умолчанию автопостинг ВЫКЛ — ничего не уходит само, пока админ не включит. */
 export const DEFAULT_ENABLED = false;
+
+/** По умолчанию AI-подхват ВЫКЛ — план крутится по кругу, пока владелец не включит. */
+export const DEFAULT_AI_ENABLED = false;
 
 const timesSchema = z.array(z.string());
 const progressSchema = z.object({
@@ -38,6 +42,7 @@ const EMPTY_PROGRESS: Progress = { date: null, postedTimes: [] };
 
 export interface AutopostConfig {
   enabled: boolean;
+  aiEnabled: boolean; // 10c: генерить AI-пост, если на слот нет готового
   times: string[]; // отсортированы, без дублей
   progress: Progress;
 }
@@ -57,8 +62,9 @@ export async function readAutopostConfig(
   prisma: PrismaClient,
   channelId: string,
 ): Promise<AutopostConfig> {
-  const [enabled, times, rawProgress] = await Promise.all([
+  const [enabled, aiEnabled, times, rawProgress] = await Promise.all([
     getBooleanSetting(prisma, channelId, AUTOPOST_KEYS.enabled, DEFAULT_ENABLED),
+    getBooleanSetting(prisma, channelId, AUTOPOST_KEYS.aiEnabled, DEFAULT_AI_ENABLED),
     readTimes(prisma, channelId),
     getJsonSetting(prisma, channelId, AUTOPOST_KEYS.progress),
   ]);
@@ -66,7 +72,7 @@ export async function readAutopostConfig(
     rawProgress === undefined
       ? EMPTY_PROGRESS
       : (progressSchema.safeParse(rawProgress).data ?? EMPTY_PROGRESS);
-  return { enabled, times, progress };
+  return { enabled, aiEnabled, times, progress };
 }
 
 /** Добавляет время в список (дедуп + сортировка). */
@@ -112,4 +118,17 @@ export async function toggleAutopost(
   channelId: string,
 ): Promise<boolean> {
   return toggleBooleanSetting(prisma, channelId, AUTOPOST_KEYS.enabled, DEFAULT_ENABLED);
+}
+
+/** Переключает AI-подхват автопостинга (10c) и возвращает новое значение. */
+export async function toggleAiAutopost(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<boolean> {
+  return toggleBooleanSetting(
+    prisma,
+    channelId,
+    AUTOPOST_KEYS.aiEnabled,
+    DEFAULT_AI_ENABLED,
+  );
 }

@@ -63,6 +63,7 @@ async function main(): Promise<void> {
     api: bot.api,
     adminId: env.ADMIN_ID,
     pexelsApiKey: env.PEXELS_API_KEY,
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
   });
 
   // Шаг 7a/7c: планировщик аналитики (напоминание ВС 21:00 МСК + отчёт по просмотрам

@@ -10,6 +10,7 @@ import {
   photoRefFromCache,
   publishPending,
   sendApprovalPreview,
+  sendPendingPreview,
   type PostingDeps,
   type PublishPendingResult,
 } from "../../../services/postingService.js";
@@ -39,6 +40,7 @@ export interface ApprovalDeps {
   logger: Logger;
   adminId: number;
   pexelsApiKey: string | undefined;
+  anthropicApiKey: string | undefined;
 }
 
 export function createApprovalComposer(deps: ApprovalDeps): Composer<Context> {
@@ -102,6 +104,7 @@ function postingDepsOf(ctx: Context, deps: ApprovalDeps): PostingDeps {
     api: ctx.api,
     adminId: deps.adminId,
     pexelsApiKey: deps.pexelsApiKey,
+    anthropicApiKey: deps.anthropicApiKey,
   };
 }
 
@@ -153,6 +156,18 @@ async function routeApproval(
     case "reroll":
       await handleReroll(ctx, deps, id);
       return;
+
+    case "preview": {
+      // 10c: пост «как в канале» приходит отдельным сообщением; превью одобрения
+      // с кнопками не трогаем. У AI-поста своих кнопок нет — будет текст+фото.
+      const result = await sendPendingPreview(postingDepsOf(ctx, deps), id);
+      await ctx.answerCallbackQuery(
+        result.ok
+          ? { text: "👀 Предпросмотр отправлен ниже" }
+          : { text: "Пост уже обработан или не найден.", show_alert: true },
+      );
+      return;
+    }
 
     case "own": {
       const pending = await getPending(deps.prisma, id);
