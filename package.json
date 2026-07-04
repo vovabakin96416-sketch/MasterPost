@@ -15,9 +15,11 @@
     "test": "vitest run",
     "seed": "tsx src/seed/index.ts",
     "gen-session": "tsx scripts/generateSession.ts",
-    "gen-session-qr": "tsx scripts/generateSession.ts --qr"
+    "gen-session-qr": "tsx scripts/generateSession.ts --qr",
+    "try-ai": "tsx scripts/tryGeneratePost.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
     "@grammyjs/auto-retry": "^2.0.2",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",

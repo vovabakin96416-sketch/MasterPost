@@ -30,6 +30,10 @@ export const envSchema = z.object({
   TELEGRAM_API_ID: z.coerce.number().int().positive().optional(),
   TELEGRAM_API_HASH: z.string().optional(),
   TELEGRAM_SESSION: z.string().optional(),
+  // Ключ Anthropic (Claude) для AI-генерации постов (Шаг 10). Опционален, как
+  // PEXELS_API_KEY: без него генерация тихо отключена (сервис возвращает null),
+  // бот работает как раньше. Ключ — только в env, НЕ в git.
+  ANTHROPIC_API_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

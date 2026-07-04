@@ -177,6 +177,31 @@ export async function getPostPhotoSources(
   });
 }
 
+/** Образец поста канала для AI-промпта (Шаг 10): только текстовые поля. */
+export interface SamplePost {
+  title: string;
+  text: string;
+  cta: string;
+}
+
+/**
+ * Несколько постов канала как образцы стиля для AI-генерации (Шаг 10). Берём из
+ * недельного контент-плана (`oneOff: false`), по порядку `externalId`. Тон канала
+ * выводится из его же постов — тематики в коде нет (niche-agnostic).
+ */
+export async function getSamplePosts(
+  prisma: PrismaClient,
+  channelId: string,
+  limit: number,
+): Promise<SamplePost[]> {
+  return prisma.post.findMany({
+    where: { channelId, oneOff: false },
+    select: { title: true, text: true, cta: true },
+    orderBy: { externalId: "asc" },
+    take: limit,
+  });
+}
+
 /** Сводка контент-плана: неделя + число постов в ней (Шаг 6.5, список недель). */
 export interface PlanWeek {
   week: number;
