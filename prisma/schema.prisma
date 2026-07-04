@@ -157,6 +157,7 @@ model PendingPost {
   text       String
   cta        String
   photoUrl   String? // кэш выбранного фото (URL Pexels или Telegram file_id) — Шаг 6a
+  pexelsQuery String? // запрос подбора фото — Шаг 10b: чтобы «🔄 Другое фото» работало и у AI-постов (externalId=null)
   createdAt  DateTime @default(now())
 
   @@index([channelId, createdAt])

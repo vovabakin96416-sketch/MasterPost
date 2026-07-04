@@ -9,6 +9,10 @@ import {
   generatePostDraft,
   type AiTextClient,
 } from "../src/services/ai/aiGenerationService";
+import {
+  requestAiPostApproval,
+  type AiPostApprovalDeps,
+} from "../src/services/ai/aiPostApprovalService";
 
 /** Тихий логгер-заглушка (как в media.test.ts). */
 const silentLogger = {
@@ -126,5 +130,22 @@ describe("generatePostDraft (фейковый клиент)", () => {
     );
     expect(draft).toBeNull();
     expect(called).toBe(false);
+  });
+});
+
+describe("requestAiPostApproval (Шаг 10b): мягкая деградация", () => {
+  it("нет ANTHROPIC_API_KEY → no_key, БД не трогаем", async () => {
+    let touched = false;
+    const deps: AiPostApprovalDeps = {
+      prisma: new Proxy({}, { get: () => (touched = true) }) as never,
+      logger: silentLogger,
+      api: {} as never,
+      adminId: 1,
+      pexelsApiKey: undefined,
+      anthropicApiKey: undefined,
+    };
+    const result = await requestAiPostApproval(deps, "ch1");
+    expect(result).toEqual({ ok: false, reason: "no_key" });
+    expect(touched).toBe(false); // ключ проверяем ДО обращений к БД
   });
 });

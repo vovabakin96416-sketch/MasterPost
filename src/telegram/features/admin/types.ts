@@ -11,12 +11,15 @@ import type { Button, Choice } from "../../../core/content/postSchema.js";
  * и доступом только администратору (`adminId`).
  */
 
-/** Зависимости меню: БД, логгер, id админа, ключ Pexels (фото) и статус MTProto. */
+/** Зависимости меню: БД, логгер, id админа, ключ Pexels (фото), ключ Anthropic (AI-пост) и статус MTProto. */
 export interface AdminDeps {
   prisma: PrismaClient;
   logger: Logger;
   adminId: number;
   pexelsApiKey: string | undefined;
+  // Шаг 10b: ключ Anthropic для кнопки «🤖 AI-пост». undefined → генерация отключена
+  // (тост-подсказка админу), как pexelsApiKey для фото.
+  anthropicApiKey: string | undefined;
   // Шаг 7b: только для строки статуса в «📊 Аналитика». Это ЧИСТЫЙ конфиг (без GramJS) —
   // меню не тянет тяжёлый mtprotoClient в импорт-граф запущенного бота.
   mtproto: MtprotoConfig;

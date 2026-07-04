@@ -3,24 +3,25 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
-Шаг 10a готов — **ФУНДАМЕНТ AI-генерации постов** (старт Шага 10, главный приоритет
-продукта). Прошлые сессии буксовали на фантоме: ссылались на «уже готовый 10a», которого
-в репо не было. Эта сессия создала сам фундамент, изолированно (меню/схему БД/approval НЕ
-трогали — чтобы 10b встал поверх без конфликтов):
-- `config/env.ts` + опциональный `ANTHROPIC_API_KEY` (нет ключа → генерация тихо отключена);
-- чистое ядро `core/ai/`: `postDraft` (zod-схема + `PostDraft` {title,text,cta,pexelsQuery}
-  + парсер), `buildPostPrompt` (промпт из примеров постов канала, niche-agnostic);
-- сервис `services/ai/aiGenerationService` (`generatePostDraft`, модель `claude-opus-4-8`,
-  Structured Outputs; сеть за `AiTextClient` → тестируется фейком; нет ключа/ошибка → null);
-- репо `getSamplePosts`; dev-харнес `npm run try-ai` (печатает JSON-черновик, ничего не публикует).
-`pexelsQuery` уже в контракте черновика (заранее закрывает часть 10b).
-⚠️ Прод-нюанс: для работы генерации добавить `ANTHROPIC_API_KEY` в env Railway.
+Шаг 10b готов — **AI-пост → очередь одобрения + кнопка в меню** (продукт поверх фундамента
+10a). Админ жмёт «🤖 AI-пост» → бот пишет пост голосом канала → кладёт его в ту же очередь
+одобрения, что и плановый пост, так что «✅ Опубликовать» / «✍️ Изменить текст» / «🔄 Другое
+фото» работают без правок. Что сделано:
+- миграция `PendingPost.pexelsQuery` (`20260704073430_...`) + проведена через `pendingPostRepository`;
+- `postingService`: `ApprovalDraft` + `requestApprovalForDraft` — единый путь очереди (плановый
+  и AI); `requestApproval(post)` стал тонкой обёрткой (плановое поведение прежнее);
+- `services/ai/aiPostApprovalService` (`requestAiPostApproval`): ключ→канал→`getSamplePosts`→
+  `generatePostDraft`→очередь; результат-union `{no_key|no_channel|no_samples|gen_failed}` →
+  понятный тост, не исключение;
+- починка «🔄 Другое фото» для AI-постов (`handleReroll`: fallback на `pending.pexelsQuery`);
+- кнопка «🤖 AI-пост» (широкая строка `MAIN_SECTIONS`, callback `aigen`) + хендлер;
+- проброс `ANTHROPIC_API_KEY`: `index.ts` → `BotDeps` → `AdminDeps`.
+⚠️ Прод-нюанс: кнопка сгенерирует пост только с `ANTHROPIC_API_KEY` в env Railway (без ключа —
+сообщение-подсказка, без падения). Миграцию `pexelsQuery` на Railway применит `prisma migrate
+deploy` (в `npm start`) сам.
 ⚠️ Прод-шаги MTProto-хотфикса всё ещё за пользователем: `npm run gen-session` → обновить
 `TELEGRAM_SESSION` на Railway → redeploy → `/start` боту. Не гонять одну сессию с двух IP.
-Дальше:
-- **Шаг 10b** — черновик → очередь одобрения: миграция `PendingPost.pexelsQuery` + репо;
-  обобщение `requestApproval` (`ApprovalDraft`); `requestAiPostApproval`; починка «🔄 Другое
-  фото» для AI-постов; кнопка «🤖 AI-пост» в меню; проброс `ANTHROPIC_API_KEY` в deps.
+Дальше — Шаг 11 (AI-ответы в комментах) либо доводка 10 (ввод темы поста в мастер AI).
 
 Отложено: шифрование bot-токенов клиентов + мультибот-форк (остаток Шага 9 — нужно поле
 `Channel.botToken` и раннер на токен; имеет смысл только в настоящем мультитенанте, отдельный план);
@@ -42,9 +43,11 @@
 хотфикс MTProto/устойчивости (destroy + сообщение о мёртвой сессии + bot.catch + setMyCommands) ·
 аудит надёжности (protect в cron + auto-retry + прогресс по-времени + онбординг от владельца) ·
 UX админ-меню (группировка 2×5 + свежие тексты + pluralRu) ·
-10a (фундамент AI-генерации: `core/ai` + `aiGenerationService` + `tryGeneratePost`).
+10a (фундамент AI-генерации: `core/ai` + `aiGenerationService` + `tryGeneratePost`) ·
+10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
+`requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 194/194**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 196/196**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

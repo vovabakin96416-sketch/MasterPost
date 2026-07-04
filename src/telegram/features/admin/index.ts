@@ -24,6 +24,11 @@ import {
   type PostingDeps,
   type PreviewNowResult,
 } from "../../../services/postingService.js";
+import {
+  requestAiPostApproval,
+  type AiPostApprovalDeps,
+  type AiPostApprovalResult,
+} from "../../../services/ai/aiPostApprovalService.js";
 import { toggleApproval } from "../../../services/approvalService.js";
 import { sendContentEndingNotice } from "../../../services/analyticsService.js";
 import { sendWeeklyReportNow } from "../../../services/analytics/weeklyReportService.js";
@@ -397,6 +402,34 @@ async function routeCallback(
       await editScreen(ctx, await renderStatus(deps));
       await ctx.answerCallbackQuery();
       return;
+
+    case "aigen": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery({
+          text: "Сначала выбери канал в «📡 Каналы».",
+          show_alert: true,
+        });
+        return;
+      }
+      // Генерация уходит к внешнему API и может занять секунды — отвечаем на
+      // callback сразу (иначе Telegram покажет «часики» и таймаут); черновик/ошибка
+      // придут отдельным сообщением (превью одобрения шлёт сам сервис).
+      await ctx.answerCallbackQuery({ text: "🤖 Генерирую пост… ⏳" });
+      const aiDeps: AiPostApprovalDeps = {
+        prisma: deps.prisma,
+        logger: deps.logger,
+        api: ctx.api,
+        adminId: deps.adminId,
+        pexelsApiKey: deps.pexelsApiKey,
+        anthropicApiKey: deps.anthropicApiKey,
+      };
+      const result = await requestAiPostApproval(aiDeps, channel.id);
+      if (!result.ok) {
+        await ctx.api.sendMessage(deps.adminId, aiPostResultText(result));
+      }
+      return;
+    }
 
     case "auto":
       await editScreen(ctx, await renderAutopost(deps));
@@ -1309,6 +1342,23 @@ async function handleInput(
       await sendScreen(ctx, renderNewPostPreview(draft, posting.timezone));
       return;
     }
+  }
+}
+
+/** Сообщение админу при неудаче генерации AI-поста (Шаг 10b). */
+function aiPostResultText(result: Extract<AiPostApprovalResult, { ok: false }>): string {
+  switch (result.reason) {
+    case "no_key":
+      return (
+        "🤖 AI-генерация выключена: не задан ANTHROPIC_API_KEY.\n" +
+        "Добавь ключ Anthropic в переменные окружения (Railway) и перезапусти бота."
+      );
+    case "no_channel":
+      return "Канал не найден (возможно, удалён). Открой «📡 Каналы».";
+    case "no_samples":
+      return "У канала нет постов-образцов — заполни контент-план, чтобы AI перенял его стиль.";
+    case "gen_failed":
+      return "Не удалось сгенерировать пост (модель не ответила или вернула мусор). Попробуй ещё раз чуть позже.";
   }
 }
 

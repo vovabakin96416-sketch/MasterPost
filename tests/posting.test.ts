@@ -3,6 +3,7 @@ import { GrammyError, type Api } from "grammy";
 import type { Logger } from "pino";
 import {
   publishDuePostsForChannel,
+  requestApprovalForDraft,
   sendApprovalPreview,
   sendPost,
   type PostingDeps,
@@ -105,6 +106,41 @@ describe("sendApprovalPreview: превью одобрения всегда до
     const notify = sendMessage.mock.calls[2];
     expect(notify[0]).toBe(42);
     expect(String(notify[1])).toContain("Прислать на тест");
+  });
+});
+
+describe("requestApprovalForDraft: обобщённая постановка в очередь (Шаг 10b)", () => {
+  it("AI-черновик (externalId=null) → снимок с pexelsQuery + превью админу", async () => {
+    // Без ключа Pexels фото не подберётся (photoUrl=null), сетевого вызова нет.
+    const create = vi.fn().mockResolvedValue({ id: "p1" });
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      setting: { findUnique: vi.fn().mockResolvedValue(null) }, // media_tier не задан → free
+      pendingPost: { create },
+    } as unknown as PostingDeps["prisma"];
+    const deps: PostingDeps = { ...makeDeps({ sendMessage }), prisma };
+
+    await requestApprovalForDraft(deps, "ch1", "@chan", {
+      title: "Заголовок",
+      text: "Тело",
+      cta: "Подпишись",
+      externalId: null,
+      pexelsQuery: "moon",
+      photoSources: { photoUrl: null, pexelsQuery: "moon", photoPath: null },
+    });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    const arg = create.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(arg.data).toMatchObject({
+      channelId: "ch1",
+      externalId: null,
+      pexelsQuery: "moon", // кэшируем запрос → «🔄 Другое фото» сработает у AI-поста
+      photoUrl: null, // нет ключа Pexels → фото не подобралось
+      title: "Заголовок",
+    });
+    // Превью ушло админу (фото null → простым сообщением).
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0][0]).toBe(42); // adminId
   });
 });
 

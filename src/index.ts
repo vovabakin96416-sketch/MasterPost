@@ -48,6 +48,7 @@ async function main(): Promise<void> {
     logger,
     adminId: env.ADMIN_ID,
     pexelsApiKey: env.PEXELS_API_KEY,
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
     mtproto,
   });
 

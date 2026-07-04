@@ -10,10 +10,11 @@ import { createOnboardingComposer } from "./features/onboarding/index.js";
 import type { CommentDeps } from "./features/comments/types.js";
 import type { MtprotoConfig } from "../services/analytics/mtprotoConfig.js";
 
-/** Зависимости бота: стадии-комментов + id админа для меню + ключ Pexels + статус MTProto. */
+/** Зависимости бота: стадии-комментов + id админа для меню + ключ Pexels + ключ Anthropic + статус MTProto. */
 export interface BotDeps extends CommentDeps {
   adminId: number;
   pexelsApiKey: string | undefined;
+  anthropicApiKey: string | undefined; // Шаг 10b: AI-генерация постов (кнопка «🤖 AI-пост»)
   mtproto: MtprotoConfig;
 }
 

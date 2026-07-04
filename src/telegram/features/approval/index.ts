@@ -191,15 +191,13 @@ async function handleReroll(ctx: Context, deps: ApprovalDeps, id: string): Promi
     await ctx.answerCallbackQuery();
     return;
   }
-  if (pending.externalId === null) {
-    await ctx.answerCallbackQuery({
-      text: "У этого поста нет запроса для подбора фото.",
-      show_alert: true,
-    });
-    return;
-  }
-  const sources = await getPostPhotoSources(deps.prisma, pending.channelId, pending.externalId);
-  const query = sources?.pexelsQuery ?? null;
+  // Запрос для подбора фото: у планового поста — из контент-плана (прежний путь);
+  // у AI-поста (externalId=null, Шаг 10b) — из снимка очереди `pending.pexelsQuery`.
+  const query =
+    pending.externalId === null
+      ? pending.pexelsQuery
+      : (await getPostPhotoSources(deps.prisma, pending.channelId, pending.externalId))
+          ?.pexelsQuery ?? null;
   if (query === null || query === "") {
     await ctx.answerCallbackQuery({
       text: "У этого поста нет запроса для подбора фото.",

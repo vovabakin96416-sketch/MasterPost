@@ -82,6 +82,8 @@ export const MAIN_SECTIONS: readonly (readonly Section[])[] = [
     { label: "🗂 Контент-план", data: encodeCb("plan") },
     { label: "➕ Новый пост", data: encodeCb("np") },
   ],
+  // Шаг 10b — флагманская фича: широкая кнопка на всю строку, чтобы выделялась.
+  [{ label: "🤖 AI-пост", data: encodeCb("aigen") }],
   [
     { label: "📅 Автопостинг", data: encodeCb("auto") },
     { label: "📋 Одобрение", data: encodeCb("appr") },

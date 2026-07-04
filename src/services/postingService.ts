@@ -33,6 +33,7 @@ import {
 } from "../db/repositories/pendingPostRepository.js";
 import { resolvePhoto, refToCacheString } from "./mediaService.js";
 import type { PhotoRef } from "../core/media/types.js";
+import type { PhotoSources } from "../core/media/resolvePriority.js";
 
 /**
  * Сервис публикации постов (Шаг 4 / Доработка 4.1 / Шаг 6a — порт `send_post`).
@@ -394,9 +395,48 @@ export async function sendApprovalPreview(
 }
 
 /**
- * Ставит пост в очередь одобрения и шлёт админу превью с кнопками (порт
- * `request_approval`). Шаг 6a: пред-загружаем фото одним запросом к провайдеру и
- * кэшируем в `PendingPost.photoUrl` — чтобы превью и публикация взяли одну картинку.
+ * Обобщённый снимок для постановки в очередь одобрения (Шаг 10b). Не привязан к
+ * посту контент-плана: обслуживает и плановый путь (`requestApproval`), и AI-пост
+ * (`requestAiPostApproval`). `externalId` — исходный пост плана или `null` (иной
+ * источник). `photoSources` — откуда брать фото (`resolvePhoto`); `pexelsQuery`
+ * дополнительно кэшируется в очереди, чтобы «🔄 Другое фото» работало у AI-постов.
+ */
+export interface ApprovalDraft {
+  readonly title: string;
+  readonly text: string;
+  readonly cta: string;
+  readonly externalId: number | null;
+  readonly pexelsQuery: string | null;
+  readonly photoSources: PhotoSources;
+}
+
+/**
+ * Ставит произвольный снимок поста в очередь одобрения и шлёт админу превью с
+ * кнопками (общий путь; порт `request_approval`). Шаг 6a: пред-загружаем фото одним
+ * запросом к провайдеру и кэшируем в `PendingPost.photoUrl` — чтобы превью и
+ * публикация взяли одну картинку. Шаг 10b: сюда сходятся плановый и AI-пост.
+ */
+export async function requestApprovalForDraft(
+  deps: PostingDeps,
+  channelId: string,
+  target: string | null,
+  draft: ApprovalDraft,
+): Promise<void> {
+  const photo = await resolvePhoto(deps, channelId, draft.photoSources);
+  const pending = await createPending(deps.prisma, channelId, {
+    title: draft.title,
+    text: draft.text,
+    cta: draft.cta,
+    externalId: draft.externalId,
+    photoUrl: refToCacheString(photo),
+    pexelsQuery: draft.pexelsQuery,
+  });
+  await sendApprovalPreview(deps, buildApprovalCaption(draft, target), pending.id, photo);
+}
+
+/**
+ * Плановый путь одобрения: снимок из поста контент-плана (Шаг 5/6a). Тонкая обёртка
+ * над `requestApprovalForDraft` — поведение прежнее, теперь ещё кэширует `pexelsQuery`.
  */
 export async function requestApproval(
   deps: PostingDeps,
@@ -404,15 +444,14 @@ export async function requestApproval(
   target: string | null,
   post: PostToPublish,
 ): Promise<void> {
-  const photo = await resolvePhoto(deps, channelId, photoSourcesOf(post));
-  const pending = await createPending(deps.prisma, channelId, {
+  await requestApprovalForDraft(deps, channelId, target, {
     title: post.title,
     text: post.text,
     cta: post.cta,
     externalId: post.externalId,
-    photoUrl: refToCacheString(photo),
+    pexelsQuery: post.pexelsQuery,
+    photoSources: photoSourcesOf(post),
   });
-  await sendApprovalPreview(deps, buildApprovalCaption(post, target), pending.id, photo);
 }
 
 /** Результат публикации одобренного поста (для тоста композера). */

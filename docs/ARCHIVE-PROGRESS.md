@@ -899,3 +899,38 @@
     `ApprovalDraft`; `requestAiPostApproval` (черновик → очередь одобрения); починка
     «🔄 Другое фото» для AI-постов (fallback на `pending.pexelsQuery`); кнопка «🤖 AI-пост»
     в админ-меню; проброс `ANTHROPIC_API_KEY` в `BotDeps`/`PostingDeps`.
+- ШАГ 10b — AI-ПОСТ В ОЧЕРЕДЬ ОДОБРЕНИЯ + КНОПКА В МЕНЮ (продолжение Шага 10). 10a дал
+  генерацию черновика; 10b довёл её до продукта: админ жмёт «🤖 AI-пост» → бот пишет пост
+  голосом канала → кладёт его в ТУ ЖЕ очередь одобрения, что и плановый пост (общий код),
+  так что «✅ Опубликовать» / «✍️ Изменить текст» / «🔄 Другое фото» работают без правок.
+  - МИГРАЦИЯ: `PendingPost.pexelsQuery String?` (`20260704073430_step10b_pending_pexels_query`)
+    — снимок запроса подбора фото, чтобы reroll работал у AI-постов (у них нет `externalId`,
+    т.е. строки в контент-плане, откуда раньше брался `pexelsQuery`). Проведено через
+    `pendingPostRepository`: `PendingPostRow` + `PendingPostInput` + `SELECT` + `createPending`.
+  - ОБОБЩЕНИЕ ОЧЕРЕДИ (`postingService`): новый `ApprovalDraft {title,text,cta,externalId,
+    pexelsQuery,photoSources}` + `requestApprovalForDraft(...)` — единый путь постановки
+    ЛЮБОГО снимка в очередь (плановый и AI). Старый `requestApproval(post: PostToPublish)`
+    стал тонкой обёрткой над ним (поведение планового пути прежнее, теперь ещё кэширует
+    `pexelsQuery`). +тест: AI-черновик (externalId=null) → снимок с pexelsQuery + превью.
+  - СЕРВИС `services/ai/aiPostApprovalService.ts` — `requestAiPostApproval(deps, channelId)`:
+    ключ → канал → `getSamplePosts` → `generatePostDraft` → `requestApprovalForDraft`
+    (externalId=null, фото предзагружаем по `pexelsQuery` черновика). Проверки от дешёвых к
+    дорогим; результат-union `{no_key|no_channel|no_samples|gen_failed}` → понятный тост/
+    сообщение админу, НЕ исключение (кнопка меню не роняет обработчик). +тест: нет ключа → no_key.
+  - ПОЧИНКА «🔄 Другое фото» (`features/approval`, `handleReroll`): было — при externalId=null
+    отказ. Стало — запрос фото берём из контент-плана (`getPostPhotoSources`) у планового
+    поста, из `pending.pexelsQuery` у AI-поста. Плановый путь не тронут.
+  - КНОПКА «🤖 AI-пост»: широкая строка в `MAIN_SECTIONS` (после «Новый пост») — флагманская
+    фича, выделяется; callback `aigen`. Хендлер: нет канала → тост; иначе отвечаем на callback
+    сразу («🤖 Генерирую пост… ⏳», т.к. генерация идёт секунды и callback мог бы протухнуть),
+    затем `requestAiPostApproval` — превью/ошибка приходят отдельным сообщением.
+  - ПРОВОД КЛЮЧА: `ANTHROPIC_API_KEY` из `index.ts` → `BotDeps` → `AdminDeps` (`anthropicApiKey`).
+    `ApprovalDeps` ключ НЕ нужен (reroll AI-поста лишь заново дёргает Pexels по `pexelsQuery`).
+  Проверки зелёные: typecheck 0, lint 0, vitest **196/196** (+2: `posting.test` requestApprovalForDraft,
+    `ai.test` requestAiPostApproval no_key). Миграция есть (см. выше); зависимостей НЕ добавляли.
+  ⚠️ Прод-нюанс: кнопка реально сгенерирует пост только с `ANTHROPIC_API_KEY` в env Railway
+    (без ключа админ получит понятное сообщение «AI-генерация выключена…», без падения). На
+    Railway `prisma migrate deploy` (в `npm start`) применит миграцию `pexelsQuery` сам.
+  ⏳ Ручная проверка (за пользователем) в TG: `/menu` → «🤖 AI-пост» на канале с контент-планом
+    и ключом → приходит превью в тоне канала → «✅ Опубликовать» публикует, «✍️ Изменить текст»
+    и «🔄 Другое фото» работают; без ключа — сообщение-подсказка, бот жив.
