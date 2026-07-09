@@ -12,6 +12,7 @@ import {
 } from "../db/repositories/postRepository.js";
 import { buildPostKeyboard } from "./postButtons.js";
 import {
+  ensureCampaignStart,
   getPostingChannelById,
   listPostingChannels,
   type PostingChannel,
@@ -220,6 +221,12 @@ export async function publishDuePostsForChannel(
   const config = await readAutopostConfig(prisma, channel.id);
   if (!config.enabled) {
     return;
+  }
+
+  // Шаг 11a: якорим старт кампании при первом активном тике, иначе `resolveCampaignDay`
+  // вечно отдаёт «неделю 1» и план стоит на месте. С этого момента недели идут по порядку.
+  if (channel.campaignStart === null) {
+    channel.campaignStart = await ensureCampaignStart(prisma, channel.id, new Date());
   }
 
   const { today, week } = resolveNow(channel);

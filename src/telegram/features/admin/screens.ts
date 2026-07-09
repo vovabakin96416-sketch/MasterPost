@@ -13,6 +13,7 @@ import { isApprovalEnabled } from "../../../services/approvalService.js";
 import { countPending } from "../../../db/repositories/pendingPostRepository.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js";
+import { postStatus } from "../../../core/schedule/postStatus.js";
 import { shouldWarnContentEnding } from "../../../core/analytics/contentEnding.js";
 import { isMtprotoConfigured } from "../../../services/analytics/mtprotoConfig.js";
 import {
@@ -82,6 +83,8 @@ export const MAIN_SECTIONS: readonly (readonly Section[])[] = [
     { label: "🗂 Контент-план", data: encodeCb("plan") },
     { label: "➕ Новый пост", data: encodeCb("np") },
   ],
+  // Шаг 11a — «где мы в плане»: текущая неделя/день + что прошло/впереди.
+  [{ label: "📅 Календарь", data: encodeCb("cal") }],
   // Шаг 10b — флагманская фича: широкая кнопка на всю строку, чтобы выделялась.
   [{ label: "🤖 AI-пост", data: encodeCb("aigen") }],
   [
@@ -697,6 +700,63 @@ export function renderEditAnswerPrompt(
 /** Поле поста по коду из callback (0/1/2 → title/text/cta) или `undefined`. */
 export function postFieldByCode(code: number): EditablePostField | undefined {
   return POST_FIELDS[code];
+}
+
+/**
+ * Экран — календарь (Шаг 11a): текущая неделя плана по дням с маркерами
+ * ✅ прошёл / ▶️ сегодня / 🔜 впереди. Отвечает на «не вижу, где мы в плане».
+ * Строки-посты кликабельны в тот же редактор поста (`pp`), что и «Контент-план».
+ */
+export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
+  const channel = await resolvePostingChannelSelected(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const today = localDateParts(new Date(), channel.timezone);
+  const start =
+    channel.campaignStart === null
+      ? null
+      : localDateParts(channel.campaignStart, channel.timezone);
+  const { week } = resolveCampaignDay(today, start);
+  const posts = await getPostsForWeek(deps.prisma, channel.id, week);
+
+  const lines = [
+    "📅 Календарь",
+    "",
+    `Неделя ${String(week)} из 4 · сегодня ${DAY_RU[today.weekday] ?? today.weekday}`,
+    "Легенда: ✅ прошёл · ▶️ сегодня · 🔜 впереди",
+  ];
+  if (channel.campaignStart === null) {
+    lines.push(
+      "",
+      "⚠️ Старт плана ещё не зафиксирован — включи «📅 Автопостинг», и недели пойдут по порядку.",
+    );
+  }
+  if (posts.length === 0) {
+    lines.push("", "В этой неделе постов нет.");
+    return {
+      text: lines.join("\n"),
+      keyboard: buildKeyboard([
+        [{ label: "🗂 Весь план", data: encodeCb("plan") }],
+        navRow(),
+      ]),
+    };
+  }
+
+  const rows: Btn[][] = posts.map((p) => {
+    const st = postStatus(today, p.day, p.time);
+    const mark = st === "passed" ? "✅" : st === "today" ? "▶️" : "🔜";
+    return [
+      {
+        label: `${mark} ${DAY_SHORT_RU[p.day] ?? p.day} ${p.time} · ${preview(p.title, 20)}`,
+        data: encodeCb("pp", p.externalId),
+      },
+    ];
+  });
+  rows.push([{ label: "🗂 Весь план", data: encodeCb("plan") }]);
+  rows.push(navRow());
+
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }
 
 /** Экран — контент-план: список недель с числом постов (Шаг 6.5). */

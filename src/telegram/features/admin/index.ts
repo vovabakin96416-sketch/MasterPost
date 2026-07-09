@@ -36,6 +36,7 @@ import { sendWeeklyReportNow } from "../../../services/analytics/weeklyReportSer
 import {
   addTrigger,
   createChannel,
+  ensureCampaignStart,
   removeTrigger,
   setChannelActive,
   setChatId,
@@ -80,6 +81,7 @@ import {
   renderTrigger,
   renderTriggers,
   renderPlan,
+  renderCalendar,
   renderPlanWeek,
   renderPlanPost,
   renderEditPostFieldPrompt,
@@ -444,6 +446,11 @@ async function routeCallback(
         return;
       }
       const next = await toggleAutopost(deps.prisma, channel.id);
+      // Шаг 11a: при включении сразу якорим старт плана (если ещё не задан), чтобы
+      // недели пошли по порядку и экраны показали верную неделю, не дожидаясь тика.
+      if (next) {
+        await ensureCampaignStart(deps.prisma, channel.id, new Date());
+      }
       await editScreen(ctx, await renderAutopost(deps));
       await ctx.answerCallbackQuery({
         text: next ? "Автопостинг включён" : "Автопостинг выключен",
@@ -662,6 +669,11 @@ async function routeCallback(
 
     case "plan":
       await editScreen(ctx, await renderPlan(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "cal":
+      await editScreen(ctx, await renderCalendar(deps));
       await ctx.answerCallbackQuery();
       return;
 

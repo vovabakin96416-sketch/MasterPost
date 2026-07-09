@@ -119,6 +119,37 @@ export async function setChatId(
   });
 }
 
+/**
+ * Якорит старт контент-плана (Шаг 11a). Если `campaignStart` ещё не задан — ставит
+ * его = `date`; если уже задан — НЕ трогает. Возвращает эффективный старт (существующий
+ * или только что выставленный), либо `null`, если канала нет. Идемпотентно.
+ *
+ * Зачем: без старта `resolveCampaignDay` всегда отдаёт «неделю 1» → план стоит на месте
+ * и каждую неделю крутит те же посты. Первый запуск автопостинга/тик планировщика
+ * фиксирует старт = сегодня, и недели начинают идти по порядку 1→2→3→4.
+ */
+export async function ensureCampaignStart(
+  prisma: PrismaClient,
+  channelId: string,
+  date: Date,
+): Promise<Date | null> {
+  const row = await prisma.channel.findUnique({
+    where: { id: channelId },
+    select: { campaignStart: true },
+  });
+  if (row === null) {
+    return null;
+  }
+  if (row.campaignStart !== null) {
+    return row.campaignStart;
+  }
+  await prisma.channel.update({
+    where: { id: channelId },
+    data: { campaignStart: date },
+  });
+  return date;
+}
+
 /** Канал в форме, нужной автопостингу (Шаг 4): цель + пояс + старт кампании. */
 export interface PostingChannel {
   id: string;

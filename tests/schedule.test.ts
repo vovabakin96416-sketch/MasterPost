@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { localDateParts } from "../src/core/schedule/localDate.js";
 import { resolveCampaignDay } from "../src/core/schedule/resolveCampaignDay.js";
 import { dueTimes, parseTime, sortTimes } from "../src/core/schedule/times.js";
+import { postStatus, weekdayIndex } from "../src/core/schedule/postStatus.js";
 import { parseDateTime } from "../src/core/schedule/parseDateTime.js";
 import {
   validateChannelTarget,
@@ -65,6 +66,40 @@ describe("resolveCampaignDay", () => {
   it("старт в будущем трактуется как неделя 1", () => {
     const start = at("2024-02-01T00:00:00Z");
     expect(resolveCampaignDay(at("2024-01-01T00:00:00Z"), start).week).toBe(1);
+  });
+});
+
+describe("postStatus", () => {
+  // 2024-01-03 — среда, 12:00 UTC.
+  const today = at("2024-01-03T12:00:00Z");
+
+  it("weekdayIndex: monday=0 … sunday=6", () => {
+    expect(weekdayIndex("monday")).toBe(0);
+    expect(weekdayIndex("wednesday")).toBe(2);
+    expect(weekdayIndex("sunday")).toBe(6);
+  });
+
+  it("день раньше сегодня → passed", () => {
+    expect(postStatus(today, "monday", "10:00")).toBe("passed");
+    expect(postStatus(today, "tuesday", "23:00")).toBe("passed");
+  });
+
+  it("сегодня, время уже прошло → passed", () => {
+    expect(postStatus(today, "wednesday", "09:00")).toBe("passed");
+    expect(postStatus(today, "wednesday", "12:00")).toBe("passed"); // ровно сейчас
+  });
+
+  it("сегодня, время впереди → today", () => {
+    expect(postStatus(today, "wednesday", "18:00")).toBe("today");
+  });
+
+  it("день позже сегодня → upcoming", () => {
+    expect(postStatus(today, "thursday", "08:00")).toBe("upcoming");
+    expect(postStatus(today, "sunday", "10:00")).toBe("upcoming");
+  });
+
+  it("кривое время в свой день трактуем как today (не роняем)", () => {
+    expect(postStatus(today, "wednesday", "abc")).toBe("today");
   });
 });
 

@@ -199,7 +199,9 @@ describe("publishDuePostsForChannel: прогресс пишется после 
       id: "ch1",
       chatId: "@target",
       timezone: "Europe/Moscow",
-      campaignStart: null,
+      // Старт уже зафиксирован — тест про прогресс, а не про якорение недели
+      // (иначе publishDuePostsForChannel полез бы за campaignStart в БД).
+      campaignStart: new Date("2026-07-01T00:00:00Z"),
       title: "Тест",
       username: null,
     };
