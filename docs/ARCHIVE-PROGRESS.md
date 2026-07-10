@@ -1011,3 +1011,36 @@
   ⏭ Отложено на 11b (если после прохода 4 недель повтор мешает): глубокий анти-повтор на
     28-дневном лупе — AI-вариации планового поста (инфра `tryGeneratePost` готова) либо ротация
     вариантов слота с отметкой «использовано».
+
+- ШАГ 11b — ЗАЩИТА ОТ РАСХОДА ТОКЕНОВ (фундамент Engagement Engine). Владелец делает SaaS;
+  главный риск — «клиенты сожгут токены». Поэтому Модуль 5 (AI-ответы в комментах) начинаем
+  не с фичи, а с переиспользуемых ограждений, на которые встанут 11c (AI-ответ по триггерам)
+  и 11d (модерация). Видимой фичи в 11b нет; поведение генерации постов НЕ изменилось.
+  - РОУТИНГ МОДЕЛЕЙ (`services/ai/aiGenerationService.ts`): рядом с `GENERATION_MODEL`
+    (`claude-opus-4-8`, дорогая — только генерация постов) добавлен `CLASSIFY_MODEL`
+    (`claude-haiku-4-5`, дешёвая — короткие ответы/классификация/модерация; для 11c/11e).
+    Политика из `План.txt` («Защита API»): дорогая модель только для генерации/сложной
+    аналитики, всё остальное — дешёвая.
+  - ТАЙМАУТ на вызов Claude (то, что просил владелец: «таймаут должен быть и здесь»):
+    `createAnthropicClient(apiKey, options?)` обобщён — `{ model, maxTokens, timeoutMs,
+    jsonSchema }` с дефолтами = прежнее поведение (Opus, 1024, JSON-схема черновика), поэтому
+    `generatePostDraft` не изменился. Таймаут передаётся вторым аргументом SDK
+    `messages.create(body, { timeout })`; дефолт `DEFAULT_AI_TIMEOUT_MS=15000`. `jsonSchema:
+    null` → без `output_config` (чистый текст, понадобится для ответов 11c). Env
+    `AI_TIMEOUT_MS` (опц., zod) протянут: `index.ts` → `BotDeps`/`AdminDeps`/`ApprovalDeps`/
+    `PostingDeps`/`AiGenerationDeps` (везде `timeoutMs?`, мягко — нет значения → дефолт).
+  - ДНЕВНОЙ БЮДЖЕТ на канал (переиспользуемое ограждение): ЧИСТОЕ ядро
+    `core/ai/dailyBudget.ts` `consumeDailyBudget(state, cap, today)` → `{allowed, state}`
+    (сброс при смене даты; `cap<=0` или `count>=cap` → запрет; иначе +1) — под тестами.
+    СЕРВИС `services/ai/aiBudget.ts` `tryConsumeDailyBudget(prisma, channelId, today)`:
+    поверх `Setting` (`ai_budget_usage` JSON `{date,count}` + `ai_daily_cap` JSON number,
+    дефолт 50); запись только при разрешении. `today` — дата в TZ канала, даёт вызывающий.
+  - ПЕР-ЮЗЕР РЕЙТ-ЛИМИТ отдельного кода не потребовал: 11c возьмёт готовый
+    `loadCooldown/saveCooldown` с синтетическим ключом `__ai_reply` (зафиксировано в доках).
+  Проверки зелёные: typecheck 0, lint 0, vitest **214/214** (+6 `dailyBudget`: сброс на новый
+    день, потолок, cap 0/отрицательный, инкремент). Правка `exactOptionalPropertyTypes`: все
+    протянутые `timeoutMs?: number | undefined` (стиль репозитория). Миграций/зависимостей нет
+    (`Setting` уже есть). Env-переменная опциональна.
+  ⏭ Дальше — 11c (AI-ответ по триггерам: `core/ai/buildReplyPrompt` + `containsTrigger` +
+    `aiReplyService` на Haiku + вживление `aiReplyStage` за тумблером `ai_reply_enabled`,
+    с кулдауном `__ai_reply` и дневным бюджетом), затем 11d (эвристический антиспам).

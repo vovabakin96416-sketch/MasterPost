@@ -62,6 +62,8 @@ export interface PostingDeps {
   adminId: number;
   pexelsApiKey: string | undefined;
   anthropicApiKey: string | undefined;
+  // Шаг 11b: таймаут вызова Claude (мс). undefined → DEFAULT_AI_TIMEOUT_MS.
+  timeoutMs?: number | undefined;
 }
 
 /** Лимит подписи к фото в Telegram. */

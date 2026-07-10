@@ -34,6 +34,10 @@ export const envSchema = z.object({
   // PEXELS_API_KEY: без него генерация тихо отключена (сервис возвращает null),
   // бот работает как раньше. Ключ — только в env, НЕ в git.
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Таймаут вызова Claude в мс (Шаг 11b, защита от расхода). Опционален: без него
+  // берётся DEFAULT_AI_TIMEOUT_MS. Гарантирует, что зависший запрос не блокирует
+  // хендлер/тик надолго (как TIMEOUT_MS у Pexels).
+  AI_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

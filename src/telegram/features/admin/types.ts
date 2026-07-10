@@ -20,6 +20,8 @@ export interface AdminDeps {
   // Шаг 10b: ключ Anthropic для кнопки «🤖 AI-пост». undefined → генерация отключена
   // (тост-подсказка админу), как pexelsApiKey для фото.
   anthropicApiKey: string | undefined;
+  // Шаг 11b: таймаут вызова Claude (мс); undefined → DEFAULT_AI_TIMEOUT_MS.
+  timeoutMs?: number | undefined;
   // Шаг 7b: только для строки статуса в «📊 Аналитика». Это ЧИСТЫЙ конфиг (без GramJS) —
   // меню не тянет тяжёлый mtprotoClient в импорт-граф запущенного бота.
   mtproto: MtprotoConfig;

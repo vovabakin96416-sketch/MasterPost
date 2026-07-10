@@ -60,7 +60,7 @@ export async function buildAiDraft(
   }
 
   const draft = await generatePostDraft(
-    { logger: deps.logger, apiKey },
+    { logger: deps.logger, apiKey, timeoutMs: deps.timeoutMs },
     { channelTitle: channel.title, examples },
   );
   if (draft === null) {

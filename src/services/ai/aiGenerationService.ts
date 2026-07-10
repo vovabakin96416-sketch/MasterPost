@@ -14,11 +14,24 @@ import { parsePostDraftJson, type PostDraft } from "../../core/ai/postDraft.js";
  * у `genProvider`/Pexels: нет ключа или ошибка → `null`, вызывающий не падает.
  */
 
-/** Модель генерации (самая сильная по умолчанию; правило claude-api). */
+/**
+ * Роутинг моделей (дёшево / дорого) — политика из `План.txt`, «Защита API».
+ * ДОРОГАЯ модель — только для генерации постов и сложной аналитики. ВСЁ остальное
+ * (ответы в комментах, модерация/классификация, оценка тем) — ДЕШЁВАЯ модель, чтобы
+ * клиенты не «сожгли» токены. `CLASSIFY_MODEL` используется в Шагах 11c/11e.
+ */
 export const GENERATION_MODEL = "claude-opus-4-8";
+export const CLASSIFY_MODEL = "claude-haiku-4-5";
 
-/** Потолок ответа: один короткий пост укладывается с запасом. */
-const MAX_TOKENS = 1024;
+/** Потолок ответа по умолчанию: один короткий пост укладывается с запасом. */
+const DEFAULT_MAX_TOKENS = 1024;
+
+/**
+ * Таймаут вызова Claude по умолчанию (мс). Аналог `TIMEOUT_MS` у Pexels: без него
+ * зависший запрос мог бы блокировать хендлер/тик надолго. Переопределяется env
+ * `AI_TIMEOUT_MS` через `AiGenerationDeps.timeoutMs`.
+ */
+export const DEFAULT_AI_TIMEOUT_MS = 15_000;
 
 /**
  * JSON-схема черновика для Structured Outputs. БЕЗ min/maxLength — они не
@@ -41,18 +54,46 @@ export interface AiTextClient {
   complete(system: string, user: string): Promise<string>;
 }
 
+/**
+ * Опции клиента Claude. Дефолты = текущее поведение генерации постов (Opus, JSON-схема
+ * черновика), поэтому `generatePostDraft` не меняется. Для коротких ответов/классификации
+ * (11c/11e) можно передать `model: CLASSIFY_MODEL` и `jsonSchema: null` (чистый текст).
+ */
+export interface AnthropicClientOptions {
+  model?: string | undefined;
+  maxTokens?: number | undefined;
+  timeoutMs?: number | undefined;
+  /** JSON-схема Structured Outputs; `null` → обычный текстовый ответ (без output_config). */
+  jsonSchema?: { [key: string]: unknown } | null | undefined;
+}
+
 /** Реальный клиент поверх @anthropic-ai/sdk (Structured Outputs → чистый JSON). */
-export function createAnthropicClient(apiKey: string): AiTextClient {
+export function createAnthropicClient(
+  apiKey: string,
+  options: AnthropicClientOptions = {},
+): AiTextClient {
   const client = new Anthropic({ apiKey });
+  const model = options.model ?? GENERATION_MODEL;
+  const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_AI_TIMEOUT_MS;
+  const jsonSchema =
+    options.jsonSchema === undefined ? DRAFT_JSON_SCHEMA : options.jsonSchema;
   return {
     async complete(system, user) {
-      const message = await client.messages.create({
-        model: GENERATION_MODEL,
-        max_tokens: MAX_TOKENS,
-        system,
-        messages: [{ role: "user", content: user }],
-        output_config: { format: { type: "json_schema", schema: DRAFT_JSON_SCHEMA } },
-      });
+      const message = await client.messages.create(
+        {
+          model,
+          max_tokens: maxTokens,
+          system,
+          messages: [{ role: "user", content: user }],
+          // output_config только когда нужен JSON; для текстовых ответов его нет.
+          ...(jsonSchema !== null
+            ? { output_config: { format: { type: "json_schema", schema: jsonSchema } } }
+            : {}),
+        },
+        // Явный таймаут (мс) — Anthropic SDK принимает per-request options вторым аргументом.
+        { timeout: timeoutMs },
+      );
       // Structured Outputs отдаёт JSON текстовым блоком; собираем text-блоки.
       return message.content
         .map((block) => (block.type === "text" ? block.text : ""))
@@ -65,6 +106,8 @@ export function createAnthropicClient(apiKey: string): AiTextClient {
 export interface AiGenerationDeps {
   logger: Logger;
   apiKey: string | undefined;
+  /** Таймаут вызова Claude (мс). Нет значения → `DEFAULT_AI_TIMEOUT_MS`. */
+  timeoutMs?: number | undefined;
 }
 
 /**
@@ -84,7 +127,7 @@ export async function generatePostDraft(
     logger.info("AI-генерация отключена: нет ANTHROPIC_API_KEY");
     return null;
   }
-  const ai = client ?? createAnthropicClient(apiKey);
+  const ai = client ?? createAnthropicClient(apiKey, { timeoutMs: deps.timeoutMs });
   const { system, user } = buildPostPrompt(input);
   try {
     const text = await ai.complete(system, user);

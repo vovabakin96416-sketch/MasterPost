@@ -426,6 +426,7 @@ async function routeCallback(
         adminId: deps.adminId,
         pexelsApiKey: deps.pexelsApiKey,
         anthropicApiKey: deps.anthropicApiKey,
+        timeoutMs: deps.timeoutMs,
       };
       const result = await requestAiPostApproval(aiDeps, channel.id);
       if (!result.ok) {
@@ -534,6 +535,7 @@ async function routeCallback(
         adminId: deps.adminId,
         pexelsApiKey: deps.pexelsApiKey,
         anthropicApiKey: deps.anthropicApiKey,
+        timeoutMs: deps.timeoutMs,
       };
       const result = await requestApprovalForPost(postingDeps, channel.id, externalId);
       await ctx.answerCallbackQuery({

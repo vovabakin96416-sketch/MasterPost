@@ -49,6 +49,7 @@ async function main(): Promise<void> {
     adminId: env.ADMIN_ID,
     pexelsApiKey: env.PEXELS_API_KEY,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
+    timeoutMs: env.AI_TIMEOUT_MS,
     mtproto,
   });
 
@@ -64,6 +65,7 @@ async function main(): Promise<void> {
     adminId: env.ADMIN_ID,
     pexelsApiKey: env.PEXELS_API_KEY,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
+    timeoutMs: env.AI_TIMEOUT_MS,
   });
 
   // Шаг 7a/7c: планировщик аналитики (напоминание ВС 21:00 МСК + отчёт по просмотрам

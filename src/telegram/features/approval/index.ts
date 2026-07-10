@@ -41,6 +41,7 @@ export interface ApprovalDeps {
   adminId: number;
   pexelsApiKey: string | undefined;
   anthropicApiKey: string | undefined;
+  timeoutMs?: number | undefined; // Шаг 11b: таймаут вызова Claude (мс); undefined → дефолт
 }
 
 export function createApprovalComposer(deps: ApprovalDeps): Composer<Context> {
@@ -105,6 +106,7 @@ function postingDepsOf(ctx: Context, deps: ApprovalDeps): PostingDeps {
     adminId: deps.adminId,
     pexelsApiKey: deps.pexelsApiKey,
     anthropicApiKey: deps.anthropicApiKey,
+    timeoutMs: deps.timeoutMs,
   };
 }
 
