@@ -233,6 +233,38 @@ export async function getPostingChannelById(
   });
 }
 
+/** Канал в форме для AI-ответа в комментах (Шаг 11c): тон/ниша/язык/TZ. */
+export interface ReplyChannel {
+  id: string;
+  title: string;
+  niche: string;
+  toneOfVoice: string | null;
+  language: string;
+  timezone: string;
+}
+
+/**
+ * Канал по id с полями голоса канала для AI-ответа (Шаг 11c). Роутинг коммента даёт
+ * только `RoutableChannel` (id/username/chatId/triggerWords) — эти поля фетчим ленивно,
+ * только когда AI-триггер уже совпал (экономим запрос на обычных комментах).
+ */
+export async function getReplyChannelById(
+  prisma: PrismaClient,
+  id: string,
+): Promise<ReplyChannel | null> {
+  return prisma.channel.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      title: true,
+      niche: true,
+      toneOfVoice: true,
+      language: true,
+      timezone: true,
+    },
+  });
+}
+
 /** Сводка канала для списка «📡 Каналы» в меню (Шаг 8a). */
 export interface ChannelListItem {
   id: string;

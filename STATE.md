@@ -3,6 +3,26 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 11c ГОТОВ** (typecheck 0, lint 0, vitest **232/232**): AI-ответ по триггер-словам в
+комментах голосом канала — видимая фича Engagement Engine на ограждениях 11b.
+- ХРАНЕНИЕ (без миграции, всё в `Setting`): `ai_reply_enabled` (boolean, дефолт **ВЫКЛ**) +
+  `ai_trigger_words` (JSON `string[]`, ОТДЕЛЬНЫЙ набор — пул готовых текстов не трогаем).
+  Дневной лимит — существующий `ai_daily_cap` (11b) + сеттер `setDailyCap` (пер-канальный, дефолт 50).
+- ЯДРО под тестами: `core/triggers/containsTrigger.ts` («сообщение СОДЕРЖИТ слово», границы по
+  пробелам, `кот ⊄ который`) · `core/ai/buildReplyPrompt.ts` (билдер тон-канала→промпт +
+  zod `parseReplyText`, лимит 600, null при пусто/длинно). Сервис `services/ai/aiReplyService.ts`
+  на дешёвой `CLASSIFY_MODEL` (Haiku), `jsonSchema:null`, обрезка коммента, мягкая деградация.
+- СТАДИЯ `aiReplyStage` вживлена (была заглушка): ворота от дешёвых к дорогим — не бот →
+  канал → тумблер → `containsTrigger` → пер-юзер кулдаун `__ai_reply` (час из общей настройки) →
+  `tryConsumeDailyBudget` (дата дня в TZ канала) → `generateReply` → ответ в тред. Бюджет
+  списываем ДО вызова, кулдаун — только при ответе. Роутинг коммент→канал вынесен в общий
+  `comments/routing.ts` (обе стадии). `CommentDeps` += `anthropicApiKey?`/`timeoutMs?`.
+- МЕНЮ: экран «🤖 AI-ответы в комментах» (`eng`) из «⚙️ Настройки»: тумблер + дневной лимит +
+  список AI-триггеров (добавить/удалить, пагинация). Паттерн `encodeCb`/pending.
+- Решения владельца: AI-кулдаун ОБЩИЙ с триггерами; `ai_daily_cap` пер-канальный (SaaS).
+- ⚠️ Прод: нужен `ANTHROPIC_API_KEY` на Railway + ВКЛ тумблер + непустой набор. Иначе молчит (расход 0).
+- ⏳ Ручная проверка в TG за пользователем (см. конец записи 11c в журнале). ⏭ Дальше — 11d (антиспам).
+
 **Шаг 11b ГОТОВ** (typecheck 0, lint 0, vitest **214/214**): защита от расхода токенов =
 фундамент Engagement Engine (Модуль 5). Видимой фичи нет; генерация постов не изменилась.
 - РОУТИНГ МОДЕЛЕЙ: `CLASSIFY_MODEL="claude-haiku-4-5"` рядом с `GENERATION_MODEL` (Opus) —
@@ -89,7 +109,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 208/208**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 232/232**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

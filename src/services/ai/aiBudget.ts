@@ -53,6 +53,19 @@ export async function readDailyCap(
 }
 
 /**
+ * Задаёт дневной потолок AI-вызовов на канал (Шаг 11c, меню Engagement). Пер-канальная
+ * настройка (SaaS): у каждого канала свой лимит. `0` полностью отключает платные вызовы.
+ * Валидацию диапазона делает вызывающий (`validateDailyCap`).
+ */
+export async function setDailyCap(
+  prisma: PrismaClient,
+  channelId: string,
+  cap: number,
+): Promise<void> {
+  await setJsonSetting(prisma, channelId, AI_BUDGET_KEYS.cap, cap);
+}
+
+/**
  * Пытается списать один платный AI-вызов из дневного бюджета канала.
  * `true` → вызов разрешён (счётчик увеличен и сохранён); `false` → лимит на сегодня
  * исчерпан (или `cap=0`). `today` — дата в таймзоне канала («YYYY-MM-DD»), её

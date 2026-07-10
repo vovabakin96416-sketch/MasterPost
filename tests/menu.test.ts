@@ -9,8 +9,10 @@ import {
 import { paginate } from "../src/core/menu/paginate";
 import {
   MAX_ANSWER_LENGTH,
+  MAX_DAILY_CAP,
   POST_FIELD_LIMITS,
   validateAnswer,
+  validateDailyCap,
   validatePostField,
   validateTriggerWord,
 } from "../src/core/menu/validation";
@@ -174,5 +176,23 @@ describe("validateTriggerWord (дедуп через нормализацию)",
   it("пустое / только знаки → ошибка", () => {
     expect(validateTriggerWord("   ", existing).ok).toBe(false);
     expect(validateTriggerWord("!!! …", existing).ok).toBe(false);
+  });
+});
+
+describe("validateDailyCap (дневной лимит AI-вызовов)", () => {
+  it("целое в диапазоне → ок (0 разрешён = отключить)", () => {
+    expect(validateDailyCap("50")).toEqual({ ok: true, value: 50 });
+    expect(validateDailyCap("0")).toEqual({ ok: true, value: 0 });
+    expect(validateDailyCap(` ${String(MAX_DAILY_CAP)} `)).toEqual({
+      ok: true,
+      value: MAX_DAILY_CAP,
+    });
+  });
+
+  it("не число / отрицательное / выше потолка → ошибка", () => {
+    expect(validateDailyCap("abc").ok).toBe(false);
+    expect(validateDailyCap("-5").ok).toBe(false);
+    expect(validateDailyCap("1.5").ok).toBe(false);
+    expect(validateDailyCap(String(MAX_DAILY_CAP + 1)).ok).toBe(false);
   });
 });

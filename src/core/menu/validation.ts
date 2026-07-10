@@ -52,6 +52,31 @@ export function validateCooldownHours(input: string): NumberValidationResult {
   return { ok: true, value: hours };
 }
 
+/** Максимальный дневной лимит AI-вызовов на канал (Шаг 11c). */
+export const MAX_DAILY_CAP = 1000;
+
+/**
+ * Проверяет ввод дневного лимита AI-вызовов (Шаг 11c): целое число 0…1000.
+ * `0` разрешён и означает «платные AI-вызовы отключены» (жёсткая защита от расхода).
+ */
+export function validateDailyCap(input: string): NumberValidationResult {
+  const trimmed = input.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return {
+      ok: false,
+      error: "Нужно целое число, например 50 (или 0, чтобы отключить AI-вызовы).",
+    };
+  }
+  const cap = Number(trimmed);
+  if (cap > MAX_DAILY_CAP) {
+    return {
+      ok: false,
+      error: `Слишком много — максимум ${String(MAX_DAILY_CAP)} вызовов в день.`,
+    };
+  }
+  return { ok: true, value: cap };
+}
+
 /**
  * Проверяет текст нового/изменённого ответа: непустой и в пределах лимита.
  * Возвращает обрезанное по краям значение (как сохраним в пул).

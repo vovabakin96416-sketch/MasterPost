@@ -1044,3 +1044,44 @@
   ⏭ Дальше — 11c (AI-ответ по триггерам: `core/ai/buildReplyPrompt` + `containsTrigger` +
     `aiReplyService` на Haiku + вживление `aiReplyStage` за тумблером `ai_reply_enabled`,
     с кулдауном `__ai_reply` и дневным бюджетом), затем 11d (эвристический антиспам).
+- Шаг 11c: AI-ответ по триггер-словам в комментах голосом канала — видимая фича на
+  ограждениях 11b. Бот ловит слово из ОТДЕЛЬНОГО набора AI-триггеров и отвечает коротким
+  текстом в тоне канала дешёвой моделью (Haiku), под тройной защитой от расхода. Пул готовых
+  текстов (`triggerStage`) не тронут; миграций/зависимостей нет — всё в `Setting`.
+  - ХРАНЕНИЕ (`services/ai/aiReplySettings.ts`): `ai_reply_enabled` (boolean, дефолт **ВЫКЛ**)
+    + `ai_trigger_words` (JSON `string[]`, отдельный набор). Дневной потолок — существующий
+    `ai_daily_cap` (11b), добавлен сеттер `setDailyCap` в `services/ai/aiBudget.ts`
+    (пер-канальный, SaaS: у каждого канала свой лимит; дефолт 50).
+  - ЧИСТОЕ ЯДРО (под тестами): `core/triggers/containsTrigger.ts` — «сообщение СОДЕРЖИТ
+    слово» (в отличие от `matchTrigger` = равенство всего сообщения), та же нормализация
+    `normalizeTriggerText`, границы слова через обрамление пробелами (`кот ⊄ который`),
+    возвращает первое совпавшее слово. `core/ai/buildReplyPrompt.ts` — билдер system/user
+    из `{channelTitle,niche,toneOfVoice,language}`+коммент + zod-парсер `parseReplyText`
+    (trim, непустой, лимит `MAX_REPLY_LENGTH=600`, иначе null — мягкая деградация).
+  - СЕРВИС `services/ai/aiReplyService.ts` `generateReply(deps,input,client?)`: билдер →
+    `createAnthropicClient(key,{model:CLASSIFY_MODEL,jsonSchema:null,timeoutMs})` → текст|null.
+    Обрезка длинного коммента (500 симв.), нет ключа/ошибка/пустой ответ → null (не падает),
+    клиент инъектируется в тестах (как `generatePostDraft`).
+  - ВЖИВЛЕНИЕ `aiReplyStage` (была заглушка `"pass"`): ворота от дешёвых к дорогим —
+    не бот/аноним → резолв канала → `ai_reply_enabled` → `containsTrigger` по AI-набору →
+    ленивый фетч полей канала (`getReplyChannelById`) → пер-юзер кулдаун (`__ai_reply`, час
+    из общей настройки канала) → `tryConsumeDailyBudget` (дата дня в TZ канала) → `generateReply`
+    → ответ в тред. Бюджет списываем ДО вызова (жёсткая защита), кулдаун ставим ТОЛЬКО при
+    реальном ответе. Любой отказ → `"pass"` (молчим). Роутинг коммента→канал вынесен из
+    `triggerStage` в общий `comments/routing.ts` (`resolveCommentChannel`) — обе стадии
+    резолвят одинаково, без дублирования. `CommentDeps` расширен `anthropicApiKey?`/`timeoutMs?`
+    (уже течёт из `BotDeps`, проводка не нужна).
+  - МЕНЮ: новый экран «🤖 AI-ответы в комментах» (`renderEngagement`, callback `eng`) из
+    «⚙️ Настройки» (строка-заглушка «скоро» заменена): тумблер `engtgl`, дневной лимит `aicap`
+    (pending `setAiCap` + `validateDailyCap` 0…1000), список AI-триггеров с пагинацией +
+    добавить `aiaddw` (pending `addAiTrigger`, `validateTriggerWord` против AI-набора) /
+    удалить `aidelw`. Паттерн `encodeCb`/pending — как у CRUD триггеров.
+  Проверки зелёные: typecheck 0, lint 0, vitest **232/232** (+16 `aiReply`: containsTrigger,
+    buildReplyPrompt/parseReplyText, generateReply с фейковым клиентом; +2 `validateDailyCap`).
+  Решения владельца: AI-кулдаун ОБЩИЙ с триггерами (тот же час, отдельный ключ учёта);
+    `ai_daily_cap` пер-канальный (SaaS), дефолт 50 — стартовое значение нового канала.
+  ⚠️ Прод: фича заработает только с `ANTHROPIC_API_KEY` на Railway И при ВКЛ тумблере
+    `ai_reply_enabled` + непустом `ai_trigger_words`. По умолчанию молчит (расход = 0).
+  ⏳ Ручная проверка в Telegram (за пользователем): добавить AI-триггер, включить тумблер,
+    написать коммент со словом → бот отвечает голосом канала; повтор в пределах кулдауна →
+    молчит; при лимите 0 → молчит. ⏭ Дальше — 11d (эвристический антиспам, 0 токенов).

@@ -15,6 +15,11 @@ import type { PrismaClient } from "../../../db/client.js";
 export interface CommentDeps {
   prisma: PrismaClient;
   logger: Logger;
+  // Шаг 11c: ключ Anthropic для AI-ответа в комментах. undefined → стадия молчит
+  // (мягкая деградация, как для кнопки «🤖 AI-пост»). Приходит из `BotDeps`.
+  anthropicApiKey?: string | undefined;
+  // Шаг 11b: таймаут вызова Claude (мс); undefined → DEFAULT_AI_TIMEOUT_MS.
+  timeoutMs?: number | undefined;
 }
 
 /** Результат стадии: `handled` — обработано (стоп), `pass` — передать дальше. */

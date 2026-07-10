@@ -50,6 +50,9 @@ export type PendingInput =
   | { readonly kind: "setCooldown" }
   | { readonly kind: "setChannel" }
   | { readonly kind: "addChannel" }
+  // Шаг 11c — Engagement: слово в набор AI-триггеров и дневной лимит AI-вызовов.
+  | { readonly kind: "addAiTrigger" }
+  | { readonly kind: "setAiCap" }
   | {
       readonly kind: "editPostField";
       readonly field: "title" | "text" | "cta";

@@ -8,6 +8,7 @@ import {
   validateAnswer,
   validateChannelTarget,
   validateCooldownHours,
+  validateDailyCap,
   validateDateTime,
   validatePostField,
   validateTime,
@@ -31,6 +32,13 @@ import {
   type AiPostApprovalResult,
 } from "../../../services/ai/aiPostApprovalService.js";
 import { toggleApproval } from "../../../services/approvalService.js";
+import {
+  addAiTriggerWord,
+  getAiTriggerWords,
+  removeAiTriggerWord,
+  toggleAiReplyEnabled,
+} from "../../../services/ai/aiReplySettings.js";
+import { setDailyCap } from "../../../services/ai/aiBudget.js";
 import { sendContentEndingNotice } from "../../../services/analyticsService.js";
 import { sendWeeklyReportNow } from "../../../services/analytics/weeklyReportService.js";
 import {
@@ -77,6 +85,9 @@ import {
   renderSetChannelPrompt,
   renderSetCooldownPrompt,
   renderSettings,
+  renderEngagement,
+  renderAddAiTriggerPrompt,
+  renderSetAiCapPrompt,
   renderStatus,
   renderTrigger,
   renderTriggers,
@@ -398,6 +409,61 @@ async function routeCallback(
     case "cd":
       pending.set(adminId, { kind: "setCooldown" });
       await editScreen(ctx, renderSetCooldownPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
+    // Шаг 11c — экран Engagement (AI-ответы в комментах).
+    case "eng":
+      await editScreen(ctx, await renderEngagement(deps, intArg(args, 0) ?? 0));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "engtgl": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleAiReplyEnabled(deps.prisma, channel.id);
+      await editScreen(ctx, await renderEngagement(deps, 0));
+      await ctx.answerCallbackQuery({
+        text: next ? "AI-ответы включены 🤖" : "AI-ответы выключены",
+      });
+      return;
+    }
+
+    case "aiaddw":
+      pending.set(adminId, { kind: "addAiTrigger" });
+      await editScreen(ctx, renderAddAiTriggerPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "aidelw": {
+      const wIdx = intArg(args, 0);
+      const page = intArg(args, 1) ?? 0;
+      const channel = await resolveSelectedChannel(deps);
+      if (wIdx === null || channel === null) {
+        await editScreen(ctx, await renderEngagement(deps, 0));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const words = await getAiTriggerWords(deps.prisma, channel.id);
+      const word = words[wIdx];
+      if (word === undefined) {
+        await editScreen(ctx, await renderEngagement(deps, page));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await removeAiTriggerWord(deps.prisma, channel.id, word);
+      deps.logger.info({ channelId: channel.id, word }, "AI-триггер удалён");
+      await editScreen(ctx, await renderEngagement(deps, page));
+      await ctx.answerCallbackQuery({ text: `AI-триггер «${word}» удалён` });
+      return;
+    }
+
+    case "aicap":
+      pending.set(adminId, { kind: "setAiCap" });
+      await editScreen(ctx, renderSetAiCapPrompt());
       await ctx.answerCallbackQuery();
       return;
 
@@ -1155,6 +1221,41 @@ async function handleInput(
           : `✅ Кулдаун: ${String(result.value)} ч.`,
       );
       await sendScreen(ctx, await renderSettings(deps));
+      return;
+    }
+
+    case "addAiTrigger": {
+      const existing = await getAiTriggerWords(deps.prisma, channel.id);
+      const result = validateTriggerWord(text, existing);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+        return; // остаёмся в режиме ввода
+      }
+      await addAiTriggerWord(deps.prisma, channel.id, result.value);
+      pending.delete(deps.adminId);
+      deps.logger.info(
+        { channelId: channel.id, word: result.value },
+        "AI-триггер добавлен",
+      );
+      await ctx.reply(`✅ AI-триггер «${result.value}» добавлен.`);
+      await sendScreen(ctx, await renderEngagement(deps, 0));
+      return;
+    }
+
+    case "setAiCap": {
+      const result = validateDailyCap(text);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}`);
+        return; // остаёмся в режиме ввода
+      }
+      await setDailyCap(deps.prisma, channel.id, result.value);
+      pending.delete(deps.adminId);
+      await ctx.reply(
+        result.value === 0
+          ? "✅ Платные AI-вызовы отключены (лимит 0)."
+          : `✅ Дневной лимит AI-вызовов: ${String(result.value)}.`,
+      );
+      await sendScreen(ctx, await renderEngagement(deps, 0));
       return;
     }
 

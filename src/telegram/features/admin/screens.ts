@@ -29,6 +29,11 @@ import {
   type EditablePostField,
 } from "../../../db/repositories/postRepository.js";
 import { getBooleanSetting } from "../../../db/repositories/settingRepository.js";
+import {
+  getAiReplyEnabled,
+  getAiTriggerWords,
+} from "../../../services/ai/aiReplySettings.js";
+import { readDailyCap } from "../../../services/ai/aiBudget.js";
 import { buildPostMessage } from "../../../services/postingService.js";
 import type { InteractiveType } from "../../../db/repositories/postRepository.js";
 import { pluralRu } from "../../../core/text/pluralRu.js";
@@ -53,6 +58,8 @@ function cooldownLabel(hours: number): string {
 const PAGE_TRIGGERS = 8;
 const PAGE_ANSWERS = 6;
 const PAGE_POSTS = 8;
+/** Сколько AI-триггеров показываем на одной странице (Шаг 11c). */
+const PAGE_AI_TRIGGERS = 8;
 
 /** Ключ настройки «отвечать в комментах» (как в Шаге 2). */
 const COMMENTS_KEY = "comments_enabled";
@@ -428,9 +435,10 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
   if (channel === null) {
     return noChannelScreen();
   }
-  const [commentsOn, cooldownHours] = await Promise.all([
+  const [commentsOn, cooldownHours, aiReplyOn] = await Promise.all([
     getBooleanSetting(deps.prisma, channel.id, COMMENTS_KEY, true),
     readCooldownHours(deps.prisma, channel.id),
+    getAiReplyEnabled(deps.prisma, channel.id),
   ]);
   return {
     text: "⚙️ Настройки",
@@ -441,10 +449,99 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
           data: encodeCb("tgl", "comments"),
         },
       ],
-      [{ label: "🤖 AI-ответы: скоро ⏳", data: encodeCb("soon") }],
+      [
+        {
+          label: `🤖 AI-ответы: ${aiReplyOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"} ›`,
+          data: encodeCb("eng"),
+        },
+      ],
       [{ label: `⏱ Кулдаун: ${cooldownLabel(cooldownHours)}`, data: encodeCb("cd") }],
       navRow(),
     ]),
+  };
+}
+
+/**
+ * Экран «Engagement» (Шаг 11c) — AI-ответ в комментах голосом канала: тумблер фичи,
+ * дневной лимит AI-вызовов (пер-канальный, SaaS) и отдельный набор AI-триггеров.
+ * Пул готовых текстов (раздел «💬 Триггеры») не трогаем — это самостоятельный набор.
+ */
+export async function renderEngagement(
+  deps: AdminDeps,
+  page: number,
+): Promise<Screen> {
+  const channel = await resolveSelectedChannel(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const [enabled, words, cap] = await Promise.all([
+    getAiReplyEnabled(deps.prisma, channel.id),
+    getAiTriggerWords(deps.prisma, channel.id),
+    readDailyCap(deps.prisma, channel.id),
+  ]);
+  const pg = paginate(words, page, PAGE_AI_TRIGGERS);
+
+  const rows: Btn[][] = [
+    [
+      {
+        label: `🤖 AI-ответы: ${enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+        data: encodeCb("engtgl"),
+      },
+    ],
+    [
+      {
+        label: `📊 Дневной лимит: ${cap === 0 ? "выкл" : String(cap)}`,
+        data: encodeCb("aicap"),
+      },
+    ],
+  ];
+  // Каждый AI-триггер — кнопка удаления (слов немного, отдельного экрана не нужно).
+  pg.slice.forEach((word, i) => {
+    const globalIdx = pg.page * PAGE_AI_TRIGGERS + i;
+    rows.push([{ label: `❌ ${word}`, data: encodeCb("aidelw", globalIdx, pg.page) }]);
+  });
+  rows.push([{ label: "➕ Добавить AI-триггер", data: encodeCb("aiaddw") }]);
+  const pager = pageRow(pg.page, pg.hasPrev, pg.hasNext, (p) =>
+    encodeCb("eng", p),
+  );
+  if (pager.length > 0) {
+    rows.push(pager);
+  }
+  rows.push(navRow(encodeCb("set")));
+
+  const lines = [
+    "🤖 AI-ответы в комментах",
+    "",
+    `Статус: ${enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+    `Дневной лимит вызовов: ${cap === 0 ? "0 (отключено)" : String(cap)}`,
+    "",
+    words.length === 0
+      ? "AI-триггеров пока нет. Добавь слова, на которые бот ответит голосом канала."
+      : `AI-триггеров: ${String(words.length)}. Бот отвечает, когда коммент содержит одно из этих слов.`,
+    "",
+    "⚠️ Ответы генерирует Claude — тратят токены. Защита: этот лимит, кулдаун и тумблер.",
+  ];
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/** Экран-приглашение: жду слово для набора AI-триггеров (Шаг 11c). */
+export function renderAddAiTriggerPrompt(): Screen {
+  return {
+    text:
+      "➕ Новый AI-триггер\n\nПришли слово или короткую фразу одним сообщением " +
+      "(например: совет).\nКогда коммент содержит это слово, бот ответит голосом канала.",
+    keyboard: buildKeyboard([navRow(encodeCb("eng", 0))]),
+  };
+}
+
+/** Экран-приглашение: жду число — дневной лимит AI-вызовов (0 — отключить). */
+export function renderSetAiCapPrompt(): Screen {
+  return {
+    text:
+      "📊 Дневной лимит AI-вызовов\n\nПришли число одним сообщением (например, 50).\n" +
+      "Столько AI-ответов канал сделает за сутки — защита от расхода токенов.\n" +
+      "Пришли 0, чтобы полностью отключить платные AI-вызовы.",
+    keyboard: buildKeyboard([navRow(encodeCb("eng", 0))]),
   };
 }
 
