@@ -11,6 +11,7 @@ import {
   renderTemplate,
 } from "../src/core/triggers/pickPrediction";
 import { isOnCooldown, nextExpiry } from "../src/core/triggers/cooldown";
+import { extractTriggerFromCta } from "../src/core/triggers/extractTriggerFromCta";
 
 // Слова канала №1 (таро) — но в код не зашиты: приходят как данные.
 const taroWords = ["карта", "кофе", "руна"];
@@ -120,6 +121,49 @@ describe("renderTemplate / pickPredictionNoRepeat", () => {
   it("answerKey стабилен и зависит от содержимого", () => {
     expect(answerKey("одинаковый")).toBe(answerKey("одинаковый"));
     expect(answerKey("A")).not.toBe(answerKey("B"));
+  });
+});
+
+describe("extractTriggerFromCta (Шаг 11f — слово-триггер из CTA)", () => {
+  it("берёт слово КАПСОМ из призыва", () => {
+    expect(extractTriggerFromCta("Напишите СЛОВО в комментах")).toBe("СЛОВО");
+    expect(extractTriggerFromCta("жду КАРТА под постом")).toBe("КАРТА");
+  });
+
+  it("берёт слово в кавычках (типографских и прямых)", () => {
+    expect(extractTriggerFromCta("напишите «любовь» в комментах")).toBe("любовь");
+    expect(extractTriggerFromCta('напишите "руна" ниже')).toBe("руна");
+    expect(extractTriggerFromCta("слово „кофе“ в ответ")).toBe("кофе");
+  });
+
+  it("короткая фраза в кавычках допустима (до 3 слов)", () => {
+    expect(extractTriggerFromCta("напишите «карта дня» в комментах")).toBe("карта дня");
+  });
+
+  it("кавычки в приоритете над КАПСОМ", () => {
+    expect(extractTriggerFromCta("Напишите СЛОВО или лучше «любовь»")).toBe("любовь");
+  });
+
+  it("игнорирует обычный текст без маркеров", () => {
+    expect(extractTriggerFromCta("напишите ваше слово в комментариях")).toBeNull();
+    expect(extractTriggerFromCta("")).toBeNull();
+    expect(extractTriggerFromCta("Ставьте лайк и подписывайтесь")).toBeNull();
+  });
+
+  it("не берёт слишком короткое КАПС-слово (< 3 букв) и не-слова", () => {
+    expect(extractTriggerFromCta("напиши OK в комментах")).toBeNull();
+    expect(extractTriggerFromCta("год 2026 будет ваш")).toBeNull();
+    expect(extractTriggerFromCta("тест «!!!» тест")).toBeNull();
+  });
+
+  it("отсекает длинную фразу в кавычках (> 3 слов)", () => {
+    expect(
+      extractTriggerFromCta("напишите «я хочу узнать своё будущее» ниже"),
+    ).toBeNull();
+  });
+
+  it("латиница КАПСОМ тоже ловится", () => {
+    expect(extractTriggerFromCta("write LOVE below this post")).toBe("LOVE");
   });
 });
 

@@ -20,6 +20,12 @@ import {
 import { localDateParts } from "../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../core/schedule/resolveCampaignDay.js";
 import { dueTimes } from "../core/schedule/times.js";
+import { extractTriggerFromCta } from "../core/triggers/extractTriggerFromCta.js";
+import { validateTriggerWord } from "../core/menu/validation.js";
+import {
+  addAiTriggerWord,
+  getAiTriggerWords,
+} from "./ai/aiReplySettings.js";
 import { readAutopostConfig, saveProgress } from "./autopostSettings.js";
 import {
   approvalKeyboard,
@@ -172,6 +178,44 @@ export async function sendPost(
   }
 }
 
+/**
+ * Шаг 11f: авто-регистрация AI-триггера из CTA опубликованного поста. Владелец
+ * пишет «напишите СЛОВО в комментах» → бот сам добавляет слово в набор
+ * `ai_trigger_words` (Шаг 11c), и стадия комментов отвечает голосом канала без
+ * ручной сверки. 0 токенов — слово достаём эвристикой (`extractTriggerFromCta`).
+ *
+ * Идемпотентно и только добавляем (снятие «отжившего» триггера — в бэклоге):
+ * `validateTriggerWord` отсекает нормализованные дубли, `addAiTriggerWord` не
+ * плодит повторов. Свои ошибки глотаем — регистрация НЕ должна ронять публикацию.
+ */
+async function registerCtaTrigger(
+  deps: PostingDeps,
+  channelId: string,
+  cta: string,
+): Promise<void> {
+  try {
+    const candidate = extractTriggerFromCta(cta);
+    if (candidate === null) {
+      return;
+    }
+    const existing = await getAiTriggerWords(deps.prisma, channelId);
+    const check = validateTriggerWord(candidate, existing);
+    if (!check.ok) {
+      return; // уже есть (нормализованный дубль) — ничего не делаем
+    }
+    await addAiTriggerWord(deps.prisma, channelId, check.value);
+    deps.logger.info(
+      { channelId, word: check.value },
+      "AI-триггер авто-зарегистрирован из CTA поста (11f)",
+    );
+  } catch (err) {
+    deps.logger.warn(
+      { err, channelId },
+      "не смог авто-зарегистрировать AI-триггер из CTA",
+    );
+  }
+}
+
 /** Уведомление админу простым текстом; ошибку доставки только логируем. */
 async function notifyAdmin(deps: PostingDeps, text: string): Promise<void> {
   try {
@@ -278,6 +322,7 @@ export async function publishDuePostsForChannel(
           photo,
           postKeyboard(channel.id, post),
         );
+        await registerCtaTrigger(deps, channel.id, post.cta);
         logger.info(
           { channelId: channel.id, week, day: today.weekday, time, idx },
           "пост опубликован (авто)",
@@ -359,6 +404,7 @@ async function placeAiFallbackPost(
   }
   const photo = await resolvePhoto(deps, channel.id, built.draft.photoSources);
   await sendPost(deps, channel.chatId, buildPostMessage(built.draft), photo);
+  await registerCtaTrigger(deps, channel.id, built.draft.cta);
   deps.logger.info({ channelId: channel.id }, "AI-пост (автоподхват) опубликован");
 }
 
@@ -400,6 +446,7 @@ async function publishOneOffPost(
     postKeyboard(channel.id, post),
   );
   await markOneOffPublished(deps.prisma, post.channelId, post.externalId);
+  await registerCtaTrigger(deps, channel.id, post.cta);
   deps.logger.info(
     { channelId: channel.id, externalId: post.externalId },
     "разовый пост опубликован",
@@ -563,6 +610,7 @@ export async function publishPending(
     keyboard,
   );
   await deletePending(deps.prisma, pendingId);
+  await registerCtaTrigger(deps, channel.id, pending.cta);
   deps.logger.info({ pendingId, channelId: channel.id }, "пост опубликован (одобрен)");
   return { ok: true };
 }
