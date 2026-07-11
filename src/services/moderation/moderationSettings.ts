@@ -24,14 +24,22 @@ export const MODERATION_KEYS = {
   delete: "moderation_delete",
   /** JSON string[] — стоп-слова канала. */
   stopWords: "moderation_stopwords",
+  // Шаг 11e — семантическая модерация токсичности через Haiku (платно).
+  /** boolean — включена ли AI-проверка токсичности (дефолт false). */
+  toxicityEnabled: "moderation_toxicity_enabled",
+  /** JSON string — доп. правило политики токсичности канала (пусто → авто по нише). */
+  toxicityPolicy: "moderation_toxicity_policy",
 } as const;
 
 /** По умолчанию модерация ВЫКЛ. */
 export const DEFAULT_MODERATION_ENABLED = false;
 /** По умолчанию авто-удаление ВЫКЛ — безопасный дефолт «только сигнал админу». */
 export const DEFAULT_MODERATION_DELETE = false;
+/** По умолчанию AI-проверка токсичности ВЫКЛ — платная фича молчит, пока не включат. */
+export const DEFAULT_MODERATION_TOXICITY = false;
 
 const stopWordsSchema = z.array(z.string());
+const policySchema = z.string();
 
 /** Читает тумблер модерации канала (дефолт false). */
 export async function getModerationEnabled(
@@ -123,4 +131,58 @@ export async function removeStopWord(
     return;
   }
   await setJsonSetting(prisma, channelId, MODERATION_KEYS.stopWords, next);
+}
+
+/** Читает тумблер AI-проверки токсичности канала (дефолт false). */
+export async function getToxicityEnabled(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<boolean> {
+  return getBooleanSetting(
+    prisma,
+    channelId,
+    MODERATION_KEYS.toxicityEnabled,
+    DEFAULT_MODERATION_TOXICITY,
+  );
+}
+
+/** Переключает тумблер AI-проверки токсичности и возвращает новое значение. */
+export async function toggleToxicityEnabled(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<boolean> {
+  return toggleBooleanSetting(
+    prisma,
+    channelId,
+    MODERATION_KEYS.toxicityEnabled,
+    DEFAULT_MODERATION_TOXICITY,
+  );
+}
+
+/** Читает доп. правило политики токсичности. Пусто/кривое → пустая строка (авто по нише). */
+export async function getToxicityPolicy(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<string> {
+  const raw = await getJsonSetting(
+    prisma,
+    channelId,
+    MODERATION_KEYS.toxicityPolicy,
+  );
+  const parsed = policySchema.safeParse(raw);
+  return parsed.success ? parsed.data : "";
+}
+
+/** Задаёт правило политики токсичности канала (пустая строка = сброс на авто). */
+export async function setToxicityPolicy(
+  prisma: PrismaClient,
+  channelId: string,
+  policy: string,
+): Promise<void> {
+  await setJsonSetting(
+    prisma,
+    channelId,
+    MODERATION_KEYS.toxicityPolicy,
+    policy,
+  );
 }

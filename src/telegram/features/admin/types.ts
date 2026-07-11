@@ -55,6 +55,8 @@ export type PendingInput =
   | { readonly kind: "setAiCap" }
   // Шаг 11d — модерация: слово в список стоп-слов.
   | { readonly kind: "addStopWord" }
+  // Шаг 11e — модерация: правило политики токсичности (свободный текст).
+  | { readonly kind: "setToxicityPolicy" }
   | {
       readonly kind: "editPostField";
       readonly field: "title" | "text" | "cta";

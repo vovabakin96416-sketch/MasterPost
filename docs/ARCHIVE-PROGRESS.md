@@ -1121,3 +1121,50 @@
   ⚠️ Прод: фича молчит, пока не ВКЛ тумблер. Ручная проверка (за пользователем): ВКЛ модерацию →
     коммент со ссылкой от не-админа → сигнал админу; ВКЛ «удалять спам» при правах → удаление;
     без прав → только сигнал. ⏭ Дальше — 11e (токсичность через Haiku, встраивается в хук `borderline`).
+
+- Шаг 11e: СЕМАНТИЧЕСКАЯ модерация токсичности через Haiku — второй слой `moderationStage`
+  после дешёвых эвристик 11d (встал в зарезервированный хук `borderline`). Эвристики слепы к
+  смыслу: враждебный коммент без ссылок/стоп-слов («автор — шарлатанка, разводит на деньги»)
+  регэкспам «чистый»; 11e классифицирует токсичность в контексте ниши канала. Платная фича под
+  теми же ограждениями, что 11b/11c. Миграций/зависимостей нет — всё в `Setting`.
+  - НИШЕ-АГНОСТИЧНОСТЬ (SaaS): классификатор читает `niche/toneOfVoice/language` канала (как
+    `buildReplyPrompt` в 11c) — один код судит токсичность для любой ниши, без хардкода. Владелец
+    любого канала может дописать своё правило (`policy`) или оставить авто-оценку по нише.
+  - ХРАНЕНИЕ (`services/moderation/moderationSettings.ts`, расширен): `moderation_toxicity_enabled`
+    (bool, дефолт **ВЫКЛ**, ОТДЕЛЬНЫЙ тумблер от эвристик) + `moderation_toxicity_policy`
+    (JSON string, пусто = авто). Действие переиспользует `moderation_delete` (11d); дневной бюджет
+    ОБЩИЙ с AI-ответами (`ai_daily_cap`/`tryConsumeDailyBudget`) — так и задумано в 11b.
+  - ЧИСТОЕ ЯДРО (под тестами, +13 к `moderation`): `core/moderation/buildToxicityPrompt.ts` —
+    билдер system/user из полей канала + опц. `policy` (строка «Дополнительно для этого канала
+    считать токсичным: …» добавляется только когда задана); `TOXICITY_JSON_SCHEMA` (Structured
+    Outputs, как `DRAFT_JSON_SCHEMA`); `parseToxicityVerdict` (JSON.parse + zod `{toxic,reason}`,
+    кривой → null); пред-фильтр `shouldCheckToxicity` (нормализованная длина ≥3 — 0 токенов на
+    эмодзи/односимвольные, короткие оскорбления проходят).
+  - СЕРВИС `services/moderation/toxicityService.ts` `classifyToxicity(deps,input,client?)`: точная
+    калька `aiReplyService` — `createAnthropicClient(key,{model:CLASSIFY_MODEL,jsonSchema:
+    TOXICITY_JSON_SCHEMA,timeoutMs})`, обрезка коммента 500, нет ключа/ошибка/кривой JSON → null
+    (мягкая деградация: стадия трактует как «не токсично»). Клиент инъектируется в тестах.
+  - ВЖИВЛЕНИЕ в `moderationStage`: действие спам- и токсичного слоёв вынесено в ОБЩИЙ хелпер
+    `enforce(ctx,deps,channelId,reasonLabel)` (читает `moderation_delete` → `tryDelete` →
+    `notifyAdmin` всегда → `handled` при удалении иначе `pass`); `notifyAdmin` обобщён на
+    `reasonLabel: string`. Токсичный слой `checkToxicity` зовётся ПОСЛЕ `detectSpam`=не-спам,
+    ворота дёшево→дорого (как `aiReplyStage`): не привилегированный → тумблер токсичности →
+    `shouldCheckToxicity` → `getReplyChannelById` (ленивый фетч ниши/тона/языка/TZ) →
+    `tryConsumeDailyBudget` (дата дня в TZ канала, списываем ДО вызова) → `getToxicityPolicy` →
+    `classifyToxicity` → toxic → `enforce("токсичность: {reason}")`. `CommentDeps` НЕ менялся
+    (`anthropicApiKey`/`timeoutMs` с 11c, `adminId` с 11d).
+  - МЕНЮ: экран «🛡 Модерация» дополнен тумблером `🧠 Токсичность (AI)` (`toxtgl`, образец `modtgl`)
+    и `📝 Политика: авто/своя` (`toxpol` → pending `setToxicityPolicy`; в `handleInput` «-»/пусто →
+    сброс `setToxicityPolicy("")`, иначе сохранить ≤500 симв.). Экран-приглашение
+    `renderSetToxicityPolicyPrompt`. Заметка «тратит токены (Haiku), лимит общий с AI-ответами».
+  Проверки зелёные: typecheck 0, lint 0, vitest **260/260** (moderation 28: +buildToxicityPrompt
+    ниша/политика, parseToxicityVerdict валид/битый/неполный, shouldCheckToxicity, classifyToxicity
+    с фейк-клиентом toxic/clean/нет-ключа/ошибка/кривой), build ок.
+  Решения владельца: охват — враждебность к каналу/автору/аудитории, но per-channel по нише (SaaS);
+    настраиваемость — авто + свободное поле политики; действие — отдельный тумблер, дефолт сигнал;
+    бюджет — общий с AI-ответами.
+  ⚠️ Прод (как 11c/11d): `ANTHROPIC_API_KEY` на Railway + ВКЛ модерацию + ВКЛ токсичность →
+    враждебный коммент без ссылок/стоп-слов от не-админа → сигнал админу с причиной; своя политика
+    влияет; при исчерпанном бюджете Haiku не зовётся (расход 0); ВКЛ `moderation_delete` при правах →
+    удаление. ⏭ Engagement Engine закрыт (эвристика 11d + AI-токсичность 11e); кандидат 11f —
+    авто-связка «слово в CTA поста ↔ AI-триггер».

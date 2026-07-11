@@ -3,29 +3,34 @@ import {
   detectSpam,
   type SpamReason,
 } from "../../../core/moderation/detectSpam.js";
+import { shouldCheckToxicity } from "../../../core/moderation/buildToxicityPrompt.js";
+import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCommentChannel } from "./routing.js";
+import { getReplyChannelById } from "../../../db/repositories/channelRepository.js";
+import { tryConsumeDailyBudget } from "../../../services/ai/aiBudget.js";
 import {
   getModerationDelete,
   getModerationEnabled,
   getStopWords,
+  getToxicityEnabled,
+  getToxicityPolicy,
 } from "../../../services/moderation/moderationSettings.js";
+import { classifyToxicity } from "../../../services/moderation/toxicityService.js";
 import type { CommentDeps, CommentStage } from "./types.js";
 
 /**
- * Стадия модерации/антиспама (Шаг 11d) — дешёвые эвристики без AI и без токенов.
+ * Стадия модерации/антиспама — стоит ПЕРВОЙ в конвейере. Два слоя:
+ * - Шаг 11d: дешёвые эвристики `detectSpam` (ссылки/флуд/повторы/стоп-слова) — 0 токенов.
+ * - Шаг 11e: семантическая токсичность через Haiku (`classifyToxicity`) — платно, только
+ *   для «внешне чистых» комментов, под тумблером + общим дневным бюджетом (как AI-ответы).
  *
- * Стоит ПЕРВОЙ в конвейере: отсекает мусор до триггеров и AI (в т.ч. чтобы AI-стадия
- * не тратила токены на ответ спамеру). Гейт: тумблер `moderation_enabled` (дефолт ВЫКЛ)
- * + отправитель не привилегированный (админа/канал не трогаем) + `detectSpam`.
- * Действие — настройка: по умолчанию только сигнал админу (прав бота не требует),
- * при тумблере `moderation_delete` — авто-удаление с мягкой деградацией, если прав нет.
- *
- * Возврат: `"handled"` только когда сообщение реально удалено (стоп-конвейер), иначе
- * `"pass"` — чтобы нормальные комменты дошли до триггеров/AI. Категория `borderline`
- * (токсичность) — хук под Шаг 11e.
+ * Гейт: тумблер `moderation_enabled` + отправитель не привилегированный (админа/канал не
+ * трогаем). Действие — настройка: по умолчанию сигнал админу (прав бота не требует), при
+ * `moderation_delete` — авто-удаление с мягкой деградацией. Возврат `"handled"` только когда
+ * сообщение реально удалено (стоп-конвейер), иначе `"pass"` — нормальные комменты идут дальше.
  */
 
-/** Человекочитаемая причина для сигнала админу. */
+/** Человекочитаемая причина спама для сигнала админу. */
 const REASON_LABEL: Record<SpamReason, string> = {
   link: "ссылка",
   mentions: "флуд упоминаний",
@@ -42,6 +47,7 @@ export function createModerationStage(): CommentStage {
       if (message?.text === undefined || from === undefined) {
         return "pass";
       }
+      const text = message.text;
 
       // Резолв «своего» канала (общий с триггер/AI-стадиями). null → pass.
       const routed = await resolveCommentChannel(ctx, deps);
@@ -58,29 +64,93 @@ export function createModerationStage(): CommentStage {
 
       // Привилегированный отправитель — бот/аноним/канал (автопересылка) или владелец.
       const isPrivileged = from.is_bot === true || from.id === deps.adminId;
+
+      // Слой 1 (11d): дешёвые эвристики, 0 токенов.
       const stopWords = await getStopWords(deps.prisma, channelId);
-      const verdict = detectSpam({
-        text: message.text,
-        isPrivileged,
-        stopWords,
-      });
-      if (!verdict.spam) {
-        return "pass";
+      const verdict = detectSpam({ text, isPrivileged, stopWords });
+      if (verdict.spam) {
+        return enforce(ctx, deps, channelId, REASON_LABEL[verdict.reason]);
       }
 
-      // Спам найден. Пытаемся удалить, если включено авто-удаление и есть права.
-      let deleted = false;
-      if (await getModerationDelete(deps.prisma, channelId)) {
-        deleted = await tryDelete(ctx, deps);
-      }
-
-      // Сигнал админу в любом случае (даже когда удалили — чтобы владелец видел).
-      await notifyAdmin(ctx, deps, verdict.reason, deleted);
-
-      // Строго по ТЗ: handled только при удалении; иначе pass.
-      return deleted ? "handled" : "pass";
+      // Слой 2 (11e): семантическая токсичность через Haiku. Ворота дёшево→дорого.
+      return checkToxicity(ctx, deps, channelId, text, isPrivileged);
     },
   };
+}
+
+/**
+ * Платный слой токсичности (Шаг 11e). Зовётся только для «не спам» комментов. Ворота
+ * от дешёвых к дорогим: привилегия → тумблер → пред-фильтр → бюджет → вызов Haiku.
+ * Любой отказ/ошибка → `"pass"` (молчим).
+ */
+async function checkToxicity(
+  ctx: Context,
+  deps: CommentDeps,
+  channelId: string,
+  text: string,
+  isPrivileged: boolean,
+): Promise<"handled" | "pass"> {
+  if (isPrivileged) {
+    return "pass";
+  }
+  if (!(await getToxicityEnabled(deps.prisma, channelId))) {
+    return "pass";
+  }
+  // Дешёвый пред-фильтр (0 токенов): не гоняем модель на эмодзи/односимвольные комменты.
+  if (!shouldCheckToxicity(text)) {
+    return "pass";
+  }
+  // Поля канала (ниша/тон/язык/TZ) — ленивый фетч, раз дошли до платного слоя.
+  const channel = await getReplyChannelById(deps.prisma, channelId);
+  if (channel === null) {
+    return "pass";
+  }
+  // Дневной бюджет (общий с AI-ответами). Списываем ДО вызова — жёсткая защита от расхода.
+  const today = localDateParts(new Date(), channel.timezone).isoDate;
+  const withinBudget = await tryConsumeDailyBudget(deps.prisma, channelId, today);
+  if (!withinBudget) {
+    deps.logger.info({ channelId }, "модерация токсичности: дневной бюджет исчерпан");
+    return "pass";
+  }
+  const policy = await getToxicityPolicy(deps.prisma, channelId);
+  const result = await classifyToxicity(
+    {
+      logger: deps.logger,
+      apiKey: deps.anthropicApiKey,
+      timeoutMs: deps.timeoutMs,
+    },
+    {
+      channelTitle: channel.title,
+      niche: channel.niche,
+      toneOfVoice: channel.toneOfVoice,
+      language: channel.language,
+      policy,
+      comment: text,
+    },
+  );
+  if (result === null || !result.toxic) {
+    return "pass";
+  }
+  return enforce(ctx, deps, channelId, `токсичность: ${result.reason}`);
+}
+
+/**
+ * Применяет действие модерации: при включённом `moderation_delete` пытается удалить
+ * коммент, сигнал админу шлёт ВСЕГДА. Возврат `"handled"` только когда реально удалили
+ * (стоп-конвейер), иначе `"pass"`. Общий для спам- и токсичного слоёв.
+ */
+async function enforce(
+  ctx: Context,
+  deps: CommentDeps,
+  channelId: string,
+  reasonLabel: string,
+): Promise<"handled" | "pass"> {
+  let deleted = false;
+  if (await getModerationDelete(deps.prisma, channelId)) {
+    deleted = await tryDelete(ctx, deps);
+  }
+  await notifyAdmin(ctx, deps, reasonLabel, deleted);
+  return deleted ? "handled" : "pass";
 }
 
 /**
@@ -95,7 +165,7 @@ async function tryDelete(ctx: Context, deps: CommentDeps): Promise<boolean> {
     if (err instanceof GrammyError) {
       deps.logger.warn(
         { err: err.description },
-        "модерация: не удалось удалить спам (нет прав?) — только сигнал",
+        "модерация: не удалось удалить (нет прав?) — только сигнал",
       );
       return false;
     }
@@ -118,11 +188,11 @@ function buildCommentLink(ctx: Context): string | null {
   return `https://t.me/c/${raw.slice(4)}/${messageId}`;
 }
 
-/** Шлёт сигнал админу о спаме. Ошибка разметки → ретрай без Markdown (как sendToAdmin). */
+/** Шлёт сигнал админу о нарушении. Ошибка разметки → ретрай без Markdown (как sendToAdmin). */
 async function notifyAdmin(
   ctx: Context,
   deps: CommentDeps,
-  reason: SpamReason,
+  reasonLabel: string,
   deleted: boolean,
 ): Promise<void> {
   const from = ctx.from;
@@ -136,8 +206,8 @@ async function notifyAdmin(
   const link = buildCommentLink(ctx);
   const snippet = (ctx.message?.text ?? "").slice(0, 200);
   const text =
-    `🛡 *Модерация*: спам в комментах\n` +
-    `Причина: ${REASON_LABEL[reason]}\n` +
+    `🛡 *Модерация*: подозрительный коммент\n` +
+    `Причина: ${reasonLabel}\n` +
     `Автор: ${author}\n` +
     `Действие: ${action}\n` +
     (link !== null ? `Коммент: ${link}\n` : "") +

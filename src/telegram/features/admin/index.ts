@@ -43,8 +43,10 @@ import {
   addStopWord,
   getStopWords,
   removeStopWord,
+  setToxicityPolicy,
   toggleModerationDelete,
   toggleModerationEnabled,
+  toggleToxicityEnabled,
 } from "../../../services/moderation/moderationSettings.js";
 import { sendContentEndingNotice } from "../../../services/analyticsService.js";
 import { sendWeeklyReportNow } from "../../../services/analytics/weeklyReportService.js";
@@ -97,6 +99,7 @@ import {
   renderSetAiCapPrompt,
   renderModeration,
   renderAddStopWordPrompt,
+  renderSetToxicityPolicyPrompt,
   renderStatus,
   renderTrigger,
   renderTriggers,
@@ -540,6 +543,28 @@ async function routeCallback(
       await ctx.answerCallbackQuery({ text: `Стоп-слово «${word}» удалено` });
       return;
     }
+
+    case "toxtgl": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleToxicityEnabled(deps.prisma, channel.id);
+      await editScreen(ctx, await renderModeration(deps, 0));
+      await ctx.answerCallbackQuery({
+        text: next
+          ? "Проверка токсичности включена 🧠 (тратит токены)"
+          : "Проверка токсичности выключена",
+      });
+      return;
+    }
+
+    case "toxpol":
+      pending.set(adminId, { kind: "setToxicityPolicy" });
+      await editScreen(ctx, renderSetToxicityPolicyPrompt());
+      await ctx.answerCallbackQuery();
+      return;
 
     case "stat":
       await editScreen(ctx, await renderStatus(deps));
@@ -1330,6 +1355,22 @@ async function handleInput(
         "стоп-слово добавлено",
       );
       await ctx.reply(`✅ Стоп-слово «${result.value}» добавлено.`);
+      await sendScreen(ctx, await renderModeration(deps, 0));
+      return;
+    }
+
+    case "setToxicityPolicy": {
+      const trimmed = text.trim();
+      // «-» или пусто → сброс на авто-оценку по нише.
+      const reset = trimmed === "" || trimmed === "-";
+      const policy = reset ? "" : trimmed.slice(0, 500);
+      await setToxicityPolicy(deps.prisma, channel.id, policy);
+      pending.delete(deps.adminId);
+      await ctx.reply(
+        reset
+          ? "✅ Политика токсичности сброшена на авто по нише."
+          : "✅ Политика токсичности обновлена.",
+      );
       await sendScreen(ctx, await renderModeration(deps, 0));
       return;
     }

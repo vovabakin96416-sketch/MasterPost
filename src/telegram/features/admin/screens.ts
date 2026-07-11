@@ -37,6 +37,8 @@ import {
   getModerationDelete,
   getModerationEnabled,
   getStopWords,
+  getToxicityEnabled,
+  getToxicityPolicy,
 } from "../../../services/moderation/moderationSettings.js";
 import { readDailyCap } from "../../../services/ai/aiBudget.js";
 import { buildPostMessage } from "../../../services/postingService.js";
@@ -560,10 +562,10 @@ export function renderSetAiCapPrompt(): Screen {
 }
 
 /**
- * Экран «🛡 Модерация» (Шаг 11d) — дешёвый антиспам без AI: тумблер фичи, тумблер
- * авто-удаления (нужны права бота; иначе только сигнал админу) и список стоп-слов.
- * Эвристики (ссылки/флуд/повторы) работают всегда при включённой фиче; стоп-слова —
- * дополнительный ручной список. Токены НЕ тратит.
+ * Экран «🛡 Модерация» — антиспам без AI (Шаг 11d: тумблер + авто-удаление + стоп-слова,
+ * 0 токенов) плюс семантическая токсичность через Haiku (Шаг 11e: тумблер + своя политика,
+ * платно, лимит общий с AI-ответами). Действие у обоих слоёв общее: сигнал админу или
+ * авто-удаление (`moddel`, нужны права бота).
  */
 export async function renderModeration(
   deps: AdminDeps,
@@ -573,10 +575,12 @@ export async function renderModeration(
   if (channel === null) {
     return noChannelScreen();
   }
-  const [enabled, autoDelete, words] = await Promise.all([
+  const [enabled, autoDelete, words, toxicityOn, policy] = await Promise.all([
     getModerationEnabled(deps.prisma, channel.id),
     getModerationDelete(deps.prisma, channel.id),
     getStopWords(deps.prisma, channel.id),
+    getToxicityEnabled(deps.prisma, channel.id),
+    getToxicityPolicy(deps.prisma, channel.id),
   ]);
   const pg = paginate(words, page, PAGE_STOP_WORDS);
 
@@ -591,6 +595,18 @@ export async function renderModeration(
       {
         label: `🗑 Удалять спам: ${autoDelete ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
         data: encodeCb("moddel"),
+      },
+    ],
+    [
+      {
+        label: `🧠 Токсичность (AI): ${toxicityOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+        data: encodeCb("toxtgl"),
+      },
+    ],
+    [
+      {
+        label: `📝 Политика: ${policy === "" ? "авто по нише" : "своя"}`,
+        data: encodeCb("toxpol"),
       },
     ],
   ];
@@ -620,8 +636,24 @@ export async function renderModeration(
     words.length === 0
       ? "Стоп-слов пока нет. Добавь слова, за которые коммент считать спамом."
       : `Стоп-слов: ${String(words.length)}.`,
+    "",
+    `🧠 Токсичность (AI): ${toxicityOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"} — ловит враждебность по смыслу`,
+    "(нападки, оскорбления) в контексте ниши канала.",
+    "⚠️ Тратит токены (Haiku), лимит ОБЩИЙ с AI-ответами.",
+    policy === "" ? "Политика: авто по нише." : `Политика: ${policy}`,
   ];
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/** Экран-приглашение: жду правило политики токсичности либо «-» для сброса (Шаг 11e). */
+export function renderSetToxicityPolicyPrompt(): Screen {
+  return {
+    text:
+      "📝 Политика токсичности\n\nПришли одним сообщением своё правило — что для этого " +
+      "канала считать токсичным (например: насмешки над картами таро и верящими людьми).\n" +
+      "Пришли «-», чтобы сбросить на авто-оценку по нише канала.",
+    keyboard: buildKeyboard([navRow(encodeCb("mod", 0))]),
+  };
 }
 
 /** Экран-приглашение: жду стоп-слово для модерации (Шаг 11d). */
