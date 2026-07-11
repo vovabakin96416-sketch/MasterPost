@@ -33,6 +33,11 @@ import {
   getAiReplyEnabled,
   getAiTriggerWords,
 } from "../../../services/ai/aiReplySettings.js";
+import {
+  getModerationDelete,
+  getModerationEnabled,
+  getStopWords,
+} from "../../../services/moderation/moderationSettings.js";
 import { readDailyCap } from "../../../services/ai/aiBudget.js";
 import { buildPostMessage } from "../../../services/postingService.js";
 import type { InteractiveType } from "../../../db/repositories/postRepository.js";
@@ -60,6 +65,8 @@ const PAGE_ANSWERS = 6;
 const PAGE_POSTS = 8;
 /** Сколько AI-триггеров показываем на одной странице (Шаг 11c). */
 const PAGE_AI_TRIGGERS = 8;
+/** Сколько стоп-слов модерации показываем на одной странице (Шаг 11d). */
+const PAGE_STOP_WORDS = 8;
 
 /** Ключ настройки «отвечать в комментах» (как в Шаге 2). */
 const COMMENTS_KEY = "comments_enabled";
@@ -435,10 +442,11 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
   if (channel === null) {
     return noChannelScreen();
   }
-  const [commentsOn, cooldownHours, aiReplyOn] = await Promise.all([
+  const [commentsOn, cooldownHours, aiReplyOn, moderationOn] = await Promise.all([
     getBooleanSetting(deps.prisma, channel.id, COMMENTS_KEY, true),
     readCooldownHours(deps.prisma, channel.id),
     getAiReplyEnabled(deps.prisma, channel.id),
+    getModerationEnabled(deps.prisma, channel.id),
   ]);
   return {
     text: "⚙️ Настройки",
@@ -453,6 +461,12 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
         {
           label: `🤖 AI-ответы: ${aiReplyOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"} ›`,
           data: encodeCb("eng"),
+        },
+      ],
+      [
+        {
+          label: `🛡 Модерация: ${moderationOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"} ›`,
+          data: encodeCb("mod"),
         },
       ],
       [{ label: `⏱ Кулдаун: ${cooldownLabel(cooldownHours)}`, data: encodeCb("cd") }],
@@ -542,6 +556,81 @@ export function renderSetAiCapPrompt(): Screen {
       "Столько AI-ответов канал сделает за сутки — защита от расхода токенов.\n" +
       "Пришли 0, чтобы полностью отключить платные AI-вызовы.",
     keyboard: buildKeyboard([navRow(encodeCb("eng", 0))]),
+  };
+}
+
+/**
+ * Экран «🛡 Модерация» (Шаг 11d) — дешёвый антиспам без AI: тумблер фичи, тумблер
+ * авто-удаления (нужны права бота; иначе только сигнал админу) и список стоп-слов.
+ * Эвристики (ссылки/флуд/повторы) работают всегда при включённой фиче; стоп-слова —
+ * дополнительный ручной список. Токены НЕ тратит.
+ */
+export async function renderModeration(
+  deps: AdminDeps,
+  page: number,
+): Promise<Screen> {
+  const channel = await resolveSelectedChannel(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const [enabled, autoDelete, words] = await Promise.all([
+    getModerationEnabled(deps.prisma, channel.id),
+    getModerationDelete(deps.prisma, channel.id),
+    getStopWords(deps.prisma, channel.id),
+  ]);
+  const pg = paginate(words, page, PAGE_STOP_WORDS);
+
+  const rows: Btn[][] = [
+    [
+      {
+        label: `🛡 Модерация: ${enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+        data: encodeCb("modtgl"),
+      },
+    ],
+    [
+      {
+        label: `🗑 Удалять спам: ${autoDelete ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+        data: encodeCb("moddel"),
+      },
+    ],
+  ];
+  // Каждое стоп-слово — кнопка удаления (список короткий, отдельного экрана не нужно).
+  pg.slice.forEach((word, i) => {
+    const globalIdx = pg.page * PAGE_STOP_WORDS + i;
+    rows.push([
+      { label: `❌ ${word}`, data: encodeCb("moddelw", globalIdx, pg.page) },
+    ]);
+  });
+  rows.push([{ label: "➕ Добавить стоп-слово", data: encodeCb("modaddw") }]);
+  const pager = pageRow(pg.page, pg.hasPrev, pg.hasNext, (p) =>
+    encodeCb("mod", p),
+  );
+  if (pager.length > 0) {
+    rows.push(pager);
+  }
+  rows.push(navRow(encodeCb("set")));
+
+  const lines = [
+    "🛡 Модерация комментов",
+    "",
+    `Статус: ${enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+    `Авто-удаление: ${autoDelete ? "ВКЛ ✅ (нужны права бота)" : "ВЫКЛ 🔇 — только сигнал"}`,
+    "",
+    "Эвристики (без AI, без токенов): ссылки, флуд @-упоминаний, растянутый текст.",
+    words.length === 0
+      ? "Стоп-слов пока нет. Добавь слова, за которые коммент считать спамом."
+      : `Стоп-слов: ${String(words.length)}.`,
+  ];
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/** Экран-приглашение: жду стоп-слово для модерации (Шаг 11d). */
+export function renderAddStopWordPrompt(): Screen {
+  return {
+    text:
+      "➕ Новое стоп-слово\n\nПришли слово или короткую фразу одним сообщением " +
+      "(например: казино).\nКоммент, содержащий это слово, будет считаться спамом.",
+    keyboard: buildKeyboard([navRow(encodeCb("mod", 0))]),
   };
 }
 

@@ -53,6 +53,8 @@ export type PendingInput =
   // Шаг 11c — Engagement: слово в набор AI-триггеров и дневной лимит AI-вызовов.
   | { readonly kind: "addAiTrigger" }
   | { readonly kind: "setAiCap" }
+  // Шаг 11d — модерация: слово в список стоп-слов.
+  | { readonly kind: "addStopWord" }
   | {
       readonly kind: "editPostField";
       readonly field: "title" | "text" | "cta";

@@ -15,6 +15,9 @@ import type { PrismaClient } from "../../../db/client.js";
 export interface CommentDeps {
   prisma: PrismaClient;
   logger: Logger;
+  // Шаг 11d: id владельца для сигнала о спаме из стадии модерации. В рантайме
+  // приходит из `BotDeps` (env.ADMIN_ID) вместе с остальными зависимостями.
+  adminId: number;
   // Шаг 11c: ключ Anthropic для AI-ответа в комментах. undefined → стадия молчит
   // (мягкая деградация, как для кнопки «🤖 AI-пост»). Приходит из `BotDeps`.
   anthropicApiKey?: string | undefined;

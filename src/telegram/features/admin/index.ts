@@ -39,6 +39,13 @@ import {
   toggleAiReplyEnabled,
 } from "../../../services/ai/aiReplySettings.js";
 import { setDailyCap } from "../../../services/ai/aiBudget.js";
+import {
+  addStopWord,
+  getStopWords,
+  removeStopWord,
+  toggleModerationDelete,
+  toggleModerationEnabled,
+} from "../../../services/moderation/moderationSettings.js";
 import { sendContentEndingNotice } from "../../../services/analyticsService.js";
 import { sendWeeklyReportNow } from "../../../services/analytics/weeklyReportService.js";
 import {
@@ -88,6 +95,8 @@ import {
   renderEngagement,
   renderAddAiTriggerPrompt,
   renderSetAiCapPrompt,
+  renderModeration,
+  renderAddStopWordPrompt,
   renderStatus,
   renderTrigger,
   renderTriggers,
@@ -466,6 +475,71 @@ async function routeCallback(
       await editScreen(ctx, renderSetAiCapPrompt());
       await ctx.answerCallbackQuery();
       return;
+
+    // Шаг 11d — экран модерации комментов (антиспам без AI).
+    case "mod":
+      await editScreen(ctx, await renderModeration(deps, intArg(args, 0) ?? 0));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "modtgl": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleModerationEnabled(deps.prisma, channel.id);
+      await editScreen(ctx, await renderModeration(deps, 0));
+      await ctx.answerCallbackQuery({
+        text: next ? "Модерация включена 🛡" : "Модерация выключена",
+      });
+      return;
+    }
+
+    case "moddel": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleModerationDelete(deps.prisma, channel.id);
+      await editScreen(ctx, await renderModeration(deps, 0));
+      await ctx.answerCallbackQuery({
+        text: next
+          ? "Авто-удаление включено 🗑 (нужны права бота)"
+          : "Авто-удаление выключено — только сигнал",
+      });
+      return;
+    }
+
+    case "modaddw":
+      pending.set(adminId, { kind: "addStopWord" });
+      await editScreen(ctx, renderAddStopWordPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "moddelw": {
+      const wIdx = intArg(args, 0);
+      const page = intArg(args, 1) ?? 0;
+      const channel = await resolveSelectedChannel(deps);
+      if (wIdx === null || channel === null) {
+        await editScreen(ctx, await renderModeration(deps, 0));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const words = await getStopWords(deps.prisma, channel.id);
+      const word = words[wIdx];
+      if (word === undefined) {
+        await editScreen(ctx, await renderModeration(deps, page));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await removeStopWord(deps.prisma, channel.id, word);
+      deps.logger.info({ channelId: channel.id, word }, "стоп-слово удалено");
+      await editScreen(ctx, await renderModeration(deps, page));
+      await ctx.answerCallbackQuery({ text: `Стоп-слово «${word}» удалено` });
+      return;
+    }
 
     case "stat":
       await editScreen(ctx, await renderStatus(deps));
@@ -1239,6 +1313,24 @@ async function handleInput(
       );
       await ctx.reply(`✅ AI-триггер «${result.value}» добавлен.`);
       await sendScreen(ctx, await renderEngagement(deps, 0));
+      return;
+    }
+
+    case "addStopWord": {
+      const existing = await getStopWords(deps.prisma, channel.id);
+      const result = validateTriggerWord(text, existing);
+      if (!result.ok) {
+        await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+        return; // остаёмся в режиме ввода
+      }
+      await addStopWord(deps.prisma, channel.id, result.value);
+      pending.delete(deps.adminId);
+      deps.logger.info(
+        { channelId: channel.id, word: result.value },
+        "стоп-слово добавлено",
+      );
+      await ctx.reply(`✅ Стоп-слово «${result.value}» добавлено.`);
+      await sendScreen(ctx, await renderModeration(deps, 0));
       return;
     }
 
