@@ -1268,3 +1268,29 @@
     только при настроенном MTProto (`TELEGRAM_API_ID/HASH/SESSION`) — иначе джоб тихо ничего не делает.
   ⏭ Дальше — 12b-2 (нативная стата `stats.getBroadcastStats`: лучшие часы Telegram) либо сразу 12c
     (отчёт/экран «📈 Рост» поверх `buildChannelIntelligence`).
+
+- Шаг 12b-2: НАТИВНАЯ СТАТА Telegram — лучшие часы канала из `stats.getBroadcastStats`. Хвост 12b,
+  который сознательно откладывали, чтобы не раздувать основной подшаг. Дополняет наш ERR-подбор
+  времени (`bestTime.ts`, мало данных при 400 подписчиках) нативным графиком по всей истории охвата.
+  - ЯДРО (`core/analytics/topHours.ts`, +9 тестов `tests/topHours.test.ts`): ЧИСТЫЙ парсер строки
+    `DataJSON.data` графа `topHoursGraph` (формат графиков Telegram `{"columns":[["x",0..23],["y0",…]]}`)
+    → `TopHour[]` {hour 0..23, value}. `parseTopHoursGraph` (натуральный порядок) + `rankTopHours`
+    (best-first, тай-брейк по часу). Битый JSON / нет колонок / час вне 0..23 / нечисло → пропуск/[].
+  - СБОР (`services/analytics/mtprotoClient.ts`): `fetchTopHours(client, target)` — изолированный
+    MTProto-хелпер. `fetchBroadcastStats` обрабатывает `STATS_MIGRATE_X` (стата живёт на профильном DC —
+    переспрашиваем на нём через `client.invoke(req, dcId)`); `resolveGraphData` тянет данные из готового
+    `StatsGraph.json.data` или догружает `StatsGraphAsync` по токену (`stats.loadAsyncGraph` на том же DC);
+    `StatsGraphError`/любая ошибка → `[]` (мягкая деградация, как `fetchSubscriberCount`).
+  - ХРАНЕНИЕ: миграция `..._step12b2_snapshot_top_hours` — `ChannelStatSnapshot.topHours Json?` (nullable
+    JSONB). Репозиторий пишет ВСЕГДА массив (в т.ч. пустой) → обходит грабли Prisma DbNull/JsonNull;
+    `[...topHours] as unknown as Prisma.InputJsonValue` (интерфейс без индекс-сигнатуры Prisma напрямую
+    не пускает). Чтение — мягкий `toTopHours` (не массив/битые элементы → []). `StatSnapshotInput`/`Row`
+    += `topHours`.
+  - ВЖИВЛЕНИЕ: `runStatSnapshot` (тот же джоб ежедневно 22:00 МСК) теперь после подписчиков зовёт
+    `fetchTopHours` и кладёт результат в снимок. `buildChannelIntelligence` уже отдаёт `latestSnapshot` —
+    значит 12c получит нативные часы бесплатно.
+  - Проверки зелёные: typecheck 0, lint 0, vitest **300/300** (+9), build ок. Миграция применена локально.
+  - ⚠️ Прод: нужны права админа канала у аккаунта MTProto (иначе `stats.getBroadcastStats` откажет →
+    пустые часы, снимок всё равно ляжет). Стата появляется у канала не сразу (нужен минимум охвата).
+  ⏭ Дальше — 12c: отчёт/экран «📈 Рост» поверх `buildChannelIntelligence` (свои слоты + нативные часы,
+    тренд охвата по снимкам, эвристический советник; AI-нарратив — 12d).

@@ -78,8 +78,12 @@ async function collectSnapshot(
   chatId: string,
   cfg: { apiId: number; apiHash: string; session: string },
 ): Promise<void> {
-  const { createMtprotoClient, fetchRecentPostMetrics, fetchSubscriberCount } =
-    await import("./mtprotoClient.js");
+  const {
+    createMtprotoClient,
+    fetchRecentPostMetrics,
+    fetchSubscriberCount,
+    fetchTopHours,
+  } = await import("./mtprotoClient.js");
   const client = createMtprotoClient(cfg.apiId, cfg.apiHash, cfg.session);
   try {
     await client.connect();
@@ -89,12 +93,14 @@ async function collectSnapshot(
       await upsertPostMetric(deps.prisma, channelId, metric);
     }
     const subscribers = await fetchSubscriberCount(client, chatId);
+    const topHours = await fetchTopHours(client, chatId);
     const stat = periodStat(metrics);
     await createStatSnapshot(deps.prisma, channelId, {
       subscribers,
       postCount7d: stat.count,
       avgViews7d: Math.round(stat.avgViews),
       avgErr7d: stat.avgErr,
+      topHours,
     });
   } finally {
     // destroy(), а не disconnect(): при мёртвой сессии update-loop GramJS иначе

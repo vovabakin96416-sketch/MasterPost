@@ -4,6 +4,7 @@ import {
   messageToMetric,
   type PostMetricInput,
 } from "../../core/analytics/weeklyReport.js";
+import { rankTopHours, type TopHour } from "../../core/analytics/topHours.js";
 
 /**
  * MTProto-клиент (Шаг 7b) — единственный модуль, который импортирует тяжёлый GramJS.
@@ -135,6 +136,76 @@ export async function fetchSubscriberCount(
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Читает нативную стату канала `stats.getBroadcastStats` на профильном DC (Шаг 12b-2)
+ * с обработкой `STATS_MIGRATE_X` — Telegram держит статистику на отдельном дата-центре
+ * и просит переспросить на нём. Возвращает саму стату и id DC (нужен, чтобы догрузить
+ * async-граф на том же DC). Ошибка/нет прав → `{ stats: null }`.
+ */
+async function fetchBroadcastStats(
+  client: TelegramClient,
+  channel: Api.TypeEntityLike,
+): Promise<{ stats: Api.stats.BroadcastStats | null; dcId: number | undefined }> {
+  const req = new Api.stats.GetBroadcastStats({ channel });
+  try {
+    return { stats: await client.invoke(req), dcId: undefined };
+  } catch (err) {
+    const match = /STATS_MIGRATE_(\d+)/.exec(String(err));
+    const dcRaw = match?.[1];
+    if (dcRaw !== undefined) {
+      const dcId = Number(dcRaw);
+      return { stats: await client.invoke(req, dcId), dcId };
+    }
+    return { stats: null, dcId: undefined };
+  }
+}
+
+/**
+ * Достаёт строку данных графа: у готового `StatsGraph` — прямо из `json.data`; у
+ * `StatsGraphAsync` — догружает по токену (`stats.loadAsyncGraph`) на том же DC, что и
+ * стата. `StatsGraphError` или иное → `null`.
+ */
+async function resolveGraphData(
+  client: TelegramClient,
+  graph: Api.TypeStatsGraph,
+  dcId: number | undefined,
+): Promise<string | null> {
+  if (graph instanceof Api.StatsGraph) {
+    return graph.json.data;
+  }
+  if (graph instanceof Api.StatsGraphAsync) {
+    const loaded = await client.invoke(
+      new Api.stats.LoadAsyncGraph({ token: graph.token }),
+      dcId,
+    );
+    return loaded instanceof Api.StatsGraph ? loaded.json.data : null;
+  }
+  return null;
+}
+
+/**
+ * Нативные «лучшие часы» канала (Шаг 12b-2) — ранжированный `TopHour[]` (best-first) из
+ * `topHoursGraph` статы Telegram. Дополняет наш ERR-подбор времени (`bestTime.ts`)
+ * данными по всей истории охвата. Мягкая деградация: нет прав/статы/сети → `[]`.
+ * Клиент должен быть уже подключён.
+ */
+export async function fetchTopHours(
+  client: TelegramClient,
+  channelTarget: string,
+): Promise<TopHour[]> {
+  try {
+    const entity = await client.getEntity(channelTarget);
+    const { stats, dcId } = await fetchBroadcastStats(client, entity);
+    if (stats === null) {
+      return [];
+    }
+    const data = await resolveGraphData(client, stats.topHoursGraph, dcId);
+    return data === null ? [] : rankTopHours(data);
+  } catch {
+    return [];
   }
 }
 

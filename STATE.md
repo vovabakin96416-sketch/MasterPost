@@ -3,6 +3,21 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 12b-2 ГОТОВ** (typecheck 0, lint 0, vitest **300/300** [+9], build ок, миграция применена локально):
+НАТИВНАЯ СТАТА Telegram — лучшие часы канала из `stats.getBroadcastStats`. Отложенный хвост 12b.
+- ЯДРО (`core/analytics/topHours.ts`, +9 тестов): чистый парсер графа Telegram (`DataJSON.data`,
+  `{"columns":[["x",0..23],["y0",…]]}`) → `TopHour[]` {hour,value}; `parseTopHoursGraph` + `rankTopHours`
+  (best-first). Битый JSON / час вне 0..23 / нечисло → []/пропуск.
+- СБОР (`mtprotoClient.ts`): `fetchTopHours` — обработка `STATS_MIGRATE_X` (стата на профильном DC →
+  `invoke(req, dcId)`), догрузка `StatsGraphAsync` через `loadAsyncGraph`; любая ошибка → [] (мягко).
+- ХРАНЕНИЕ: миграция `..._snapshot_top_hours` — `ChannelStatSnapshot.topHours Json?`. Пишем всегда
+  массив (обход Prisma DbNull), читаем мягким `toTopHours`. Джоб снимка (22:00 МСК) кладёт часы в снимок;
+  `buildChannelIntelligence` уже отдаёт `latestSnapshot` → 12c получит нативные часы бесплатно.
+- ⚠️ Прод: нужны права админа канала у MTProto-аккаунта (иначе часы пустые, снимок всё равно ляжет);
+  стата появляется у канала не сразу (нужен минимум охвата).
+- ⏭ Дальше — **12c**: отчёт/экран «📈 Рост» (свои слоты + нативные часы, тренд по снимкам, эвристический
+  советник; AI-нарратив — 12d).
+
 **Шаг 12b ГОТОВ** (typecheck 0, lint 0, vitest **291/291** [+2], build ок, миграция применена локально):
 ДАННЫЕ И СБОР для Content Intelligence — наполняет ядро 12a реальными данными. Второй подшаг эпика 12.
 - СХЕМА (миграция `..._step12b_content_dimensions_snapshot`): `PostMetric` += `hasMedia`/`hasButtons`
@@ -236,7 +251,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 291/291**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 300/300**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).
