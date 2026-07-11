@@ -3,6 +3,27 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 12a ГОТОВ** (typecheck 0, lint 0, vitest **289/289** [+21], build ок): ЯДРО Content Intelligence
+— чистая математика превращения сырых метрик в выводы. Первый подшаг эпика 12 «Content Intelligence +
+Growth Advisor» (план `.claude/plans/12-content-nifty-river.md`). Ни Telegram/БД/AI — только `core`.
+- ЗАЧЕМ: еженедельный отчёт 7c даёт сырые числа без выводов. 12a считает «что зашло / когда публиковать /
+  растёт ли охват», задаёт «словарь метрик» для 12b (сбор+сервис) и 12c (отчёт+экран «📈 Рост»). 0 токенов.
+- НОВЫЕ МОДУЛИ `src/core/analytics/` (+21 тест, `tests/contentIntelligence.test.ts`):
+  `engagement.ts` (ERR=(реакции+комменты)/просмотры, ≤0→0) · `dimensions.ts` (`timeDimensions`→
+  hour/weekday/slot, порог `MIDDAY_HOUR=15`, реюз `localDateParts`) · `outliers.ts` (риск №5: `median`+
+  `flagViewOutliers`, ≥3× медианы=виральный/рекламный, `MIN_SAMPLE_FOR_OUTLIERS=4`) · `bestTime.ts`
+  (`rankPostingTimes` — ср. ERR по день×слот, лучшее первым, выбросы вон) · `trend.ts` (`compareTrend` —
+  Δ% просмотров/ERR неделя-к-неделе, up/down/flat, `FLAT_THRESHOLD_PCT=5`, пустая база→null) ·
+  `insights.ts` (`buildInsights`→`Insights`{count,best/worst по ERR,bestTimes,trend,outliers}; выбросы
+  исключены из лучший/худший и из времени, отданы отдельно). Только факты — текст в 12c, AI в 12d.
+- РЕШЕНИЯ (план): время — своя история + нативная стата Telegram (`stats.getBroadcastStats`, 12b);
+  тренд — лёгкая таблица `ChannelStatSnapshot` (12b, миграция); вывод И в отчёт, И в экран «📈 Рост»;
+  советник сначала эвристики (12c), AI — 12d; Telemetr (12e) за адаптером `MarketDataProvider` +
+  мягкая деградация — платный сервис НЕ фундамент (риск №4), свой канал живёт на MTProto бесплатно.
+- ⚠️ Telemetr-ключ владельца — ТОЛЬКО в env (не в коде/git); засветился в переписке → перевыпустить перед 12e.
+- ⏭ Дальше — **12b**: миграция (поля медиа/кнопки/длина на `PostMetric` + `ChannelStatSnapshot`) +
+  обогащение MTProto-сбора + `stats.getBroadcastStats` + сервис `contentIntelligenceService` + джоб снимка.
+
 **Шаг 11f ГОТОВ** (typecheck 0, lint 0, vitest **268/268**, build ок): авто-регистрация AI-триггера
 из CTA опубликованного поста — закрывает UX-нюанс 11c (триггеры больше не надо заводить руками).
 - ЗАЧЕМ: владелец публикует «напишите СЛОВО в комментах» → бот САМ добавляет слово в `ai_trigger_words`
@@ -193,7 +214,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 268/268**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 289/289**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).
