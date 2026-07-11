@@ -65,6 +65,7 @@ model Channel {
   subscribers  Subscriber[]
   pendingPosts PendingPost[]
   postMetrics  PostMetric[]
+  statSnapshots ChannelStatSnapshot[]
 }
 
 // Пост контент-плана. Поля повторяют content.json.
@@ -175,11 +176,33 @@ model PostMetric {
   reactions   Int      @default(0)
   replies     Int      @default(0)
   preview     String // короткий текст поста (для отчёта/истории)
+  // Контентные измерения поста (Шаг 12b) — которых нет в сыром снимке 7c.
+  // Питают ядро 12a: «что заходит» = медиа/кнопки/длина против вовлечённости.
+  hasMedia    Boolean  @default(false) // есть ли фото/видео/док (msg.media)
+  hasButtons  Boolean  @default(false) // есть ли inline-кнопки (msg.replyMarkup)
+  charLen     Int      @default(0) // длина текста/подписи поста (символов)
   postedAt    DateTime // дата публикации сообщения
   collectedAt DateTime @updatedAt // когда последний раз сняли метрики
 
   @@unique([channelId, messageId])
   @@index([channelId, postedAt])
+}
+
+// Периодический снимок агрегатов канала (Шаг 12b) — лёгкая таблица для тренда охвата.
+// Джоб аналитики раз в сутки кладёт сюда «сколько подписчиков / сколько постов за 7д /
+// средние просмотры и ERR за 7д». Ядро 12a сравнивает снимки во времени (растёт охват
+// или падает), не пересчитывая всё по сырым метрикам. Один канал → много снимков.
+model ChannelStatSnapshot {
+  id          String   @id @default(cuid())
+  channelId   String
+  channel     Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  capturedAt  DateTime @default(now()) // момент снимка
+  subscribers Int? // число подписчиков (из нативной статы; null — не удалось получить)
+  postCount7d Int      @default(0) // постов за последние 7 дней
+  avgViews7d  Int      @default(0) // средние просмотры за 7 дней
+  avgErr7d    Float    @default(0) // средний ERR за 7 дней (доля 0..1)
+
+  @@index([channelId, capturedAt])
 }
 
 // Подписчик канала (заготовка под аналитику).

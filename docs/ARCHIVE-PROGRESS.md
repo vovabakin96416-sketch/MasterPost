@@ -1230,3 +1230,41 @@
   Проверки зелёные: typecheck 0, lint 0, vitest **289/289** (+21), build ок.
   ⏭ Дальше — 12b: миграция (поля медиа/кнопки/длина на PostMetric + таблица `ChannelStatSnapshot`) +
     обогащение MTProto-сбора + чтение `stats.getBroadcastStats` + сервис `contentIntelligenceService`.
+
+- Шаг 12b: ДАННЫЕ И СБОР для Content Intelligence — наполняет ядро 12a реальными данными.
+  Второй подшаг эпика 12. Схема (миграция) + обогащение MTProto-сбора + сервис + джоб снимка.
+  - СХЕМА (миграция `20260711172515_step12b_content_dimensions_snapshot`):
+    · `PostMetric` += `hasMedia`/`hasButtons` (Boolean, дефолт false) + `charLen` (Int, дефолт 0) —
+      контентные измерения «что заходит», которых нет в сыром снимке 7c. Дефолты бэкфилят старые строки.
+    · Новая таблица `ChannelStatSnapshot` (channelId, capturedAt, subscribers?, postCount7d, avgViews7d,
+      avgErr7d) — периодические снимки агрегатов для тренда охвата (сравнение во времени без пересчёта
+      по всем сырым метрикам). `avgErr7d` — Float (доля 0..1). Индекс `[channelId, capturedAt]`.
+  - ЯДРО (`core/analytics/weeklyReport.ts`): `PostMetricInput` += `hasMedia`/`hasButtons`/`charLen`;
+    `RawMessageLike` += `replyMarkup?`; `messageToMetric` считает их (`media`/`replyMarkup` → boolean,
+    `charLen` = ПОЛНАЯ длина текста, не обрезанное превью). +4 теста (медиа без подписи, reply_markup,
+    charLen по полному тексту), обновлён exact-match тест.
+  - СБОР (`services/analytics/mtprotoClient.ts`): окно чтения 30 → **100** сообщений (для тренда нужны
+    два окна по 7 дней). `messageToMetric` теперь тянет медиа/кнопки автоматически (GramJS `msg.media`/
+    `msg.replyMarkup` структурно совпадают с `RawMessageLike`). Новая `fetchSubscriberCount` через
+    `channels.getFullChannel` → `fullChat.participantsCount` (сужение `"participantsCount" in fullChat`,
+    т.к. поле только у `ChannelFull`); любая ошибка → null (мягкая деградация, снимок всё равно ляжет).
+  - НАТИВНАЯ СТАТА (`stats.getBroadcastStats`, лучшие часы Telegram) — СОЗНАТЕЛЬНО вынесена в **12b-2**,
+    чтобы не раздувать подшаг (план прямо разрешил). Подписчики берём дешёвым `getFullChannel`.
+  - РЕПОЗИТОРИИ: `postMetricRepository` — `upsertPostMetric` пишет новые поля; новая `listPostMetricsSince`
+    (читает снимки канала с даты → `PostMetricInput[]`, сорт по дате). Новый
+    `channelStatSnapshotRepository` — `createStatSnapshot` (append-only) + `getLatestStatSnapshot`.
+  - СЕРВИС `services/analytics/contentIntelligenceService.ts` (две роли):
+    · `buildChannelIntelligence(prisma, channelId, tz, now?)` — ЧИТАЕТ из БД (`PostMetric` +
+      `ChannelStatSnapshot`), делит два окна по 7д, строит `Insights` ядра 12a + отдаёт последний снимок.
+      0 токенов, без MTProto — это то, что 12c покажет владельцу.
+    · `runStatSnapshot(deps)` — ДЖОБ: динамич. импорт GramJS, свежий сбор метрик (upsert) + подписчики +
+      агрегаты 7д (`periodStat`) → `createStatSnapshot`. `destroy()` в finally (как отчёт 7c). Без MTProto/
+      канала — тихо. Ошибки логируются, планировщик не роняется.
+  - ДЖОБ (`scheduler/analytics.ts`): третий крон — снимок охвата ежедневно **22:00 МСК** (`protect:true`).
+    Изоляция сохранена: GramJS только динамическим импортом внутри `runStatSnapshot`.
+  - Проверки зелёные: typecheck 0, lint 0, vitest **291/291** (+2 нетто), build ок. Миграция применена
+    локально (`prisma migrate dev`).
+  - ⚠️ Прод: миграцию на Railway применит `prisma migrate deploy` (в `npm start`). Снимок реально пишется
+    только при настроенном MTProto (`TELEGRAM_API_ID/HASH/SESSION`) — иначе джоб тихо ничего не делает.
+  ⏭ Дальше — 12b-2 (нативная стата `stats.getBroadcastStats`: лучшие часы Telegram) либо сразу 12c
+    (отчёт/экран «📈 Рост» поверх `buildChannelIntelligence`).

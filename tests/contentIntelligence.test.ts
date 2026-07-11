@@ -25,6 +25,9 @@ function metric(over: Partial<PostMetricInput> = {}): PostMetricInput {
     replies: 2,
     preview: "Текст",
     postedAt: new Date("2026-06-22T07:00:00Z"), // ПН 10:00 МСК
+    hasMedia: false,
+    hasButtons: false,
+    charLen: 5,
     ...over,
   };
 }

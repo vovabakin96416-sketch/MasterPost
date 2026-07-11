@@ -17,6 +17,9 @@ function metric(over: Partial<PostMetricInput> = {}): PostMetricInput {
     replies: 2,
     preview: "Текст поста",
     postedAt: new Date("2026-06-22T07:00:00Z"), // 10:00 МСК
+    hasMedia: false,
+    hasButtons: false,
+    charLen: 11,
     ...over,
   };
 }
@@ -157,6 +160,9 @@ describe("messageToMetric", () => {
       replies: 7,
       preview: "Карта дня",
       postedAt: new Date(1_700_000_000 * 1000),
+      hasMedia: false,
+      hasButtons: false,
+      charLen: 9, // «Карта дня» = 9 символов
     });
   });
 
@@ -167,8 +173,26 @@ describe("messageToMetric", () => {
     expect(m?.reactions).toBe(7);
   });
 
-  it("длинное превью режется до 80 символов", () => {
+  it("длинное превью режется до 80, а charLen хранит полную длину (Шаг 12b)", () => {
     const m = messageToMetric(raw({ message: "я".repeat(200) }));
     expect(m?.preview.length).toBe(80);
+    expect(m?.charLen).toBe(200); // длина — по полному тексту, не по обрезанному превью
+  });
+
+  it("медиа без подписи → hasMedia=true, charLen=0 (Шаг 12b)", () => {
+    const m = messageToMetric(raw({ message: undefined, media: { photo: true } }));
+    expect(m?.hasMedia).toBe(true);
+    expect(m?.hasButtons).toBe(false);
+    expect(m?.charLen).toBe(0);
+  });
+
+  it("reply_markup → hasButtons=true (Шаг 12b)", () => {
+    const withButtons = messageToMetric(
+      raw({ replyMarkup: { rows: [{ buttons: [] }] } }),
+    );
+    expect(withButtons?.hasButtons).toBe(true);
+    // null трактуем как «кнопок нет» (GramJS отдаёт null у постов без разметки).
+    const withoutButtons = messageToMetric(raw({ replyMarkup: null }));
+    expect(withoutButtons?.hasButtons).toBe(false);
   });
 });

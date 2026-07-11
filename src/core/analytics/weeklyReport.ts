@@ -15,6 +15,10 @@ export interface PostMetricInput {
   readonly replies: number;
   readonly preview: string;
   readonly postedAt: Date;
+  // Контентные измерения (Шаг 12b): «что заходит» = медиа/кнопки/длина против ERR.
+  readonly hasMedia: boolean; // есть ли фото/видео/док
+  readonly hasButtons: boolean; // есть ли inline-кнопки (reply_markup)
+  readonly charLen: number; // длина текста/подписи (символов, до обрезки превью)
 }
 
 /** До скольких символов режем сырое превью при чтении (отчёт обрежет ещё короче). */
@@ -32,6 +36,8 @@ export interface RawMessageLike {
   readonly message?: string | undefined;
   /** Любое медиа (фото/видео…); undefined → текстовый или служебный пост. */
   readonly media?: unknown;
+  /** Разметка inline-кнопок поста (`msg.replyMarkup`); undefined → кнопок нет. */
+  readonly replyMarkup?: unknown;
   readonly views?: number | undefined;
   readonly reactions?:
     | { readonly results: readonly { readonly count: number }[] }
@@ -60,6 +66,10 @@ export function messageToMetric(msg: RawMessageLike): PostMetricInput | null {
     replies: msg.replies?.replies ?? 0,
     preview: text.slice(0, RAW_PREVIEW_LENGTH),
     postedAt: new Date(msg.date * 1000),
+    // `media`/`replyMarkup` — GramJS-объекты либо undefined/null; наличие → boolean.
+    hasMedia: msg.media !== undefined && msg.media !== null,
+    hasButtons: msg.replyMarkup !== undefined && msg.replyMarkup !== null,
+    charLen: text.length, // полная длина, а не обрезанное превью
   };
 }
 

@@ -3,6 +3,28 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 12b ГОТОВ** (typecheck 0, lint 0, vitest **291/291** [+2], build ок, миграция применена локально):
+ДАННЫЕ И СБОР для Content Intelligence — наполняет ядро 12a реальными данными. Второй подшаг эпика 12.
+- СХЕМА (миграция `..._step12b_content_dimensions_snapshot`): `PostMetric` += `hasMedia`/`hasButtons`
+  (bool, деф. false) + `charLen` (int, деф. 0) — контентные измерения «что заходит»; новая таблица
+  `ChannelStatSnapshot` (subscribers?, postCount7d, avgViews7d, avgErr7d Float) — снимки для тренда охвата.
+- ЯДРО (`core/analytics/weeklyReport.ts`): `PostMetricInput`/`RawMessageLike` += измерения; `messageToMetric`
+  считает медиа/кнопки (`media`/`replyMarkup`→bool) и `charLen` = ПОЛНАЯ длина (не обрезанное превью).
+- СБОР (`mtprotoClient.ts`): окно 30→**100** сообщений (тренд = 2 окна по 7д); новая `fetchSubscriberCount`
+  (`channels.getFullChannel`→`participantsCount`, ошибка→null). `stats.getBroadcastStats` (лучшие часы)
+  СОЗНАТЕЛЬНО вынесена в **12b-2**, чтобы не раздувать подшаг (план разрешил).
+- РЕПОЗИТОРИИ: `upsertPostMetric` пишет новые поля; `listPostMetricsSince` (чтение); новый
+  `channelStatSnapshotRepository` (`createStatSnapshot` append-only + `getLatestStatSnapshot`).
+- СЕРВИС `contentIntelligenceService.ts`: `buildChannelIntelligence` (БД-only, 2 окна по 7д → `Insights`
+  ядра 12a + последний снимок; 0 токенов — для 12c) + `runStatSnapshot` (ДЖОБ: MTProto свежий сбор +
+  подписчики + агрегаты `periodStat` → снимок; `destroy()` в finally; без MTProto/канала — тихо).
+- ДЖОБ (`scheduler/analytics.ts`): снимок охвата ежедневно **22:00 МСК** (3-й крон, `protect`, изоляция
+  GramJS через динамич. импорт сохранена).
+- ⚠️ Прод: миграцию на Railway применит `prisma migrate deploy` (в `npm start`); снимок пишется только при
+  настроенном MTProto, иначе джоб тихо ничего не делает.
+- ⏭ Дальше — **12b-2** (нативная стата: лучшие часы Telegram) либо сразу **12c** (отчёт/экран «📈 Рост»
+  поверх `buildChannelIntelligence`).
+
 **Шаг 12a ГОТОВ** (typecheck 0, lint 0, vitest **289/289** [+21], build ок): ЯДРО Content Intelligence
 — чистая математика превращения сырых метрик в выводы. Первый подшаг эпика 12 «Content Intelligence +
 Growth Advisor» (план `.claude/plans/12-content-nifty-river.md`). Ни Telegram/БД/AI — только `core`.
@@ -214,7 +236,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 289/289**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 291/291**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

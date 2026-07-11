@@ -1,4 +1,4 @@
-import { TelegramClient } from "telegram";
+import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import {
   messageToMetric,
@@ -17,8 +17,12 @@ import {
 /** Сколько раз GramJS пере-подключается при обрыве связи. */
 const CONNECTION_RETRIES = 5;
 
-/** Сколько последних сообщений канала просматриваем (как `limit=30` в Python). */
-const RECENT_MESSAGES_LIMIT = 30;
+/**
+ * Сколько последних сообщений канала просматриваем. Шаг 12b расширил окно с 30 до 100:
+ * для тренда неделя-к-неделе нужны ДВА окна по 7 дней (текущее + прошлое), а при
+ * нескольких постах в день 30 сообщений не покрывают даже двух недель.
+ */
+const RECENT_MESSAGES_LIMIT = 100;
 
 /** Колбэки интерактивного входа — инъекция, чтобы readline жил в скрипте, а не тут. */
 export interface LoginPrompts {
@@ -102,6 +106,36 @@ export async function fetchRecentPostMetrics(
   }
 
   return metrics;
+}
+
+/**
+ * Читает число подписчиков канала (Шаг 12b) через `channels.getFullChannel` —
+ * `fullChat.participantsCount`. Нужен для снимка охвата `ChannelStatSnapshot`.
+ * Мягкая деградация: любая ошибка (нет прав/сети/чат — не канал) → `null`, снимок
+ * всё равно сохранится с постовыми агрегатами. Клиент должен быть уже подключён.
+ *
+ * Нативный график лучших часов (`stats.getBroadcastStats`) сюда НЕ входит — вынесен
+ * в подшаг 12b-2, чтобы не раздувать текущий шаг (окно/медиа/кнопки/снимок).
+ */
+export async function fetchSubscriberCount(
+  client: TelegramClient,
+  channelTarget: string,
+): Promise<number | null> {
+  try {
+    const entity = await client.getEntity(channelTarget);
+    const full = await client.invoke(
+      new Api.channels.GetFullChannel({ channel: entity }),
+    );
+    const fullChat = full.fullChat;
+    // participantsCount есть только у ChannelFull (не у ChatFull) — сужаем через `in`.
+    if ("participantsCount" in fullChat) {
+      const count = fullChat.participantsCount;
+      return typeof count === "number" ? count : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
