@@ -79,11 +79,17 @@ export function parseTopHoursGraph(jsonData: string): TopHour[] {
 }
 
 /**
- * Парсит и ранжирует часы по убыванию активности (лучший час — первым). При равенстве —
- * по возрастанию часа (детерминизм). Дубли часов не схлопываем (граф их не содержит).
+ * Ранжирует уже разобранные часы по убыванию активности (лучший час — первым). При
+ * равенстве — по возрастанию часа (детерминизм). Не мутирует вход.
+ */
+export function sortTopHours(hours: readonly TopHour[]): TopHour[] {
+  return [...hours].sort((a, b) => b.value - a.value || a.hour - b.hour);
+}
+
+/**
+ * Парсит и ранжирует часы по убыванию активности (лучший час — первым). Дубли часов
+ * не схлопываем (граф их не содержит).
  */
 export function rankTopHours(jsonData: string): TopHour[] {
-  return parseTopHoursGraph(jsonData).sort(
-    (a, b) => b.value - a.value || a.hour - b.hour,
-  );
+  return sortTopHours(parseTopHoursGraph(jsonData));
 }

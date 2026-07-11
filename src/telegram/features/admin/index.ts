@@ -105,6 +105,7 @@ import {
   renderTriggers,
   renderPlan,
   renderCalendar,
+  renderGrowth,
   renderPlanWeek,
   renderPlanPost,
   renderEditPostFieldPrompt,
@@ -842,6 +843,11 @@ async function routeCallback(
     case "cal":
       await editScreen(ctx, await renderCalendar(deps));
       await ctx.answerCallbackQuery();
+      return;
+
+    case "grow":
+      await ctx.answerCallbackQuery({ text: "Считаю выводы… ⏳" });
+      await editScreen(ctx, await renderGrowth(deps));
       return;
 
     case "pw": {

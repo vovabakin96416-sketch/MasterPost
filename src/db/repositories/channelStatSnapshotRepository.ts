@@ -49,9 +49,23 @@ export async function getLatestStatSnapshot(
   prisma: PrismaClient,
   channelId: string,
 ): Promise<StatSnapshotRow | null> {
-  const row = await prisma.channelStatSnapshot.findFirst({
+  const rows = await listRecentStatSnapshots(prisma, channelId, 1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Последние `take` снимков канала, новейший первым. Нужен тренду охвата (12c): по
+ * двум последним снимкам считаем Δ подписчиков. Пусто → пустой список.
+ */
+export async function listRecentStatSnapshots(
+  prisma: PrismaClient,
+  channelId: string,
+  take: number,
+): Promise<StatSnapshotRow[]> {
+  const rows = await prisma.channelStatSnapshot.findMany({
     where: { channelId },
     orderBy: { capturedAt: "desc" },
+    take,
     select: {
       capturedAt: true,
       subscribers: true,
@@ -61,11 +75,10 @@ export async function getLatestStatSnapshot(
       topHours: true,
     },
   });
-  if (row === null) {
-    return null;
-  }
-  const { topHours, ...rest } = row;
-  return { ...rest, topHours: toTopHours(topHours) };
+  return rows.map(({ topHours, ...rest }) => ({
+    ...rest,
+    topHours: toTopHours(topHours),
+  }));
 }
 
 /**

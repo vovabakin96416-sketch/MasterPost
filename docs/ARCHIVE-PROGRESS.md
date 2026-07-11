@@ -1294,3 +1294,48 @@
     пустые часы, снимок всё равно ляжет). Стата появляется у канала не сразу (нужен минимум охвата).
   ⏭ Дальше — 12c: отчёт/экран «📈 Рост» поверх `buildChannelIntelligence` (свои слоты + нативные часы,
     тренд охвата по снимкам, эвристический советник; AI-нарратив — 12d).
+
+- Шаг 12c: ВЫВОД Content Intelligence — впервые ПОКАЗЫВАЕТ владельцу выводы (отчёт + экран «📈 Рост»).
+  Третий подшаг эпика 12. Ядро 12a считает, 12b/12b-2 наполняют данными — 12c форматирует и выводит.
+  0 токенов, 0 миграций (всё из готовых таблиц `PostMetric`/`ChannelStatSnapshot`). Сделан ЦЕЛИКОМ (и
+  ядро+сервис+секция отчёта, и отдельный экран меню) — скоуп не пришлось резать по шву 12c-1/12c-2.
+  - ЯДРО — контентные измерения (`core/analytics/dimensions.ts`, +2 теста): `contentDimensionStats`
+    (средний ERR по hasMedia/hasButtons + бакеты длины) + `lengthBucket` (`CHAR_LEN_SHORT_MAX=200`,
+    `CHAR_LEN_LONG_MIN=600`). Чистая группировка, пустая группа → {count:0, avgErr:0}. Вынес рядом с
+    временными измерениями (`ContentDimensioned extends EngagementLike`, без импорта БД/weeklyReport).
+  - ЯДРО — эвристический советник (`core/analytics/advisor.ts`, +5 тестов): `buildAdvice(insights,
+    contentStats, snapshot)` → `Advice[]` (дискриминированный union kind+priority, ФАКТЫ без текста TG).
+    Правила: лучший/худший слот по ERR; нативные часы Telegram (`SnapshotSummary.nativeTopHoursLocal`,
+    совпал ли слот топ-часа с нашим → `matchesOwn`); тренд (viewsDirection + Δ подписчиков между снимками);
+    контент (медиа/кнопки/длина — `compareTwo`/`bestLengthBucket`, порог `MIN_POSTS_PER_DIMENSION=2`);
+    выбросы отдельной пометкой. Порог достаточности `MIN_POSTS_FOR_ADVICE=3` (мало постов → только
+    `not_enough_data`). `snapshot` — ЧИСТЫЙ тип ядра `SnapshotSummary` (без типов БД, часы уже локальные).
+  - ЯДРО — форматтер (`core/analytics/insightsReport.ts`, +2 теста): `buildInsightsReport(insights,
+    advice, nativeTopHoursLocal)` → строки «что зашло / что провалилось / лучшее время (свои слоты +
+    нативные часы Telegram) / рекомендации». Пусто → заглушка. ⚠️ БЕЗ Markdown-эмфазы (`*`/`_`): один
+    текст идёт и в еженедельный отчёт (Markdown), и на экран (editMessageText БЕЗ parse_mode) — эмодзи+
+    структура читаются одинаково; превью чистятся от `*`/`_`. Параметр `tz` НЕ нужен (пояс уже зашит:
+    слоты считаны в 12a, нативные часы локализованы сервисом) — убран, чтобы не ловить no-unused-vars.
+  - ЯДРО (`topHours.ts`): выделен `sortTopHours(readonly TopHour[])` (ранжирование уже разобранных часов);
+    `rankTopHours(json)` теперь тонкая обёртка над ним. Нужен сервису для нативных часов из снимка.
+  - РЕПОЗИТОРИЙ (`channelStatSnapshotRepository.ts`): `listRecentStatSnapshots(prisma, channelId, take)`
+    (новейший первым) для Δ подписчиков между снимками; `getLatestStatSnapshot` стал обёрткой над ним.
+  - СЕРВИС (`services/analytics/contentIntelligenceService.ts`): `buildChannelIntelligence` расширен —
+    возвращает `contentStats` (по текущему окну) + два последних снимка (`latestSnapshot`/`previousSnapshot`).
+    Новый `buildGrowthReport(prisma, channelId, tz, now?)` — БД-only поверх `buildChannelIntelligence` →
+    `toSnapshotSummary` (нативные часы UTC→пояс канала через `utcHourToLocal`, Δ подписчиков) → `buildAdvice`
+    → `buildInsightsReport`. 0 токенов, без MTProto.
+  - ВЫВОД в двух местах (решение из плана «И в отчёт, И в экран»):
+    · Еженедельный отчёт (`weeklyReportService.ts`): после сырых чисел 7c дописывается секция
+      `buildGrowthReport` (через разделитель). Метрики только что записаны в БД → отчёт читает свежие данные.
+    · Экран «📈 Рост» (`renderGrowth` + широкая кнопка `grow` в `MAIN_SECTIONS` + ветка роутера): паттерн
+      как «📅 Календарь»/«📊 Аналитика». Тост «Считаю выводы… ⏳», затем `editScreen` (плейн-текст).
+      Подсказка про MTProto: настроен → «обновляется автоматически», нет → «метрики не собираются».
+  - Проверки зелёные: typecheck 0, lint 0, vitest **310/310** (+10), build ок. Миграций НЕТ (всё из
+    готовых таблиц). Смоук-прогон пайплайна (buildInsights→buildAdvice→buildInsightsReport) — текст связный.
+  - ⚠️ Прод: экран/секция работают всегда, но выводы скудны без данных — их наполняют джоб снимка (22:00
+    МСК) и еженедельный отчёт (ПН 09:30 МСК), оба требуют настроенного MTProto + прав админа канала.
+    Тренд по просмотрам берётся из `insights.trend` (12a) по всему окну, включая выбросы — на экстремальном
+    выбросе % может скакнуть (на реальных данных не критично; при желании — исключение выбросов из тренда).
+  ⏭ Дальше — 12d (AI-нарратив: тот же отчёт голосом канала через Haiku) либо 12e (Telemetr за адаптером
+    `MarketDataProvider`). Автоперестановка расписания по выводам — отдельный будущий шаг.

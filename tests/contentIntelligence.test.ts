@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { engagementRate } from "../src/core/analytics/engagement";
-import { timeDimensions, MIDDAY_HOUR } from "../src/core/analytics/dimensions";
+import {
+  timeDimensions,
+  MIDDAY_HOUR,
+  contentDimensionStats,
+  lengthBucket,
+  CHAR_LEN_SHORT_MAX,
+  CHAR_LEN_LONG_MIN,
+} from "../src/core/analytics/dimensions";
 import {
   median,
   flagViewOutliers,
@@ -12,7 +19,13 @@ import {
   compareTrend,
   FLAT_THRESHOLD_PCT,
 } from "../src/core/analytics/trend";
-import { buildInsights } from "../src/core/analytics/insights";
+import { buildInsights, type Insights } from "../src/core/analytics/insights";
+import {
+  buildAdvice,
+  MIN_POSTS_FOR_ADVICE,
+  type SnapshotSummary,
+} from "../src/core/analytics/advisor";
+import { buildInsightsReport } from "../src/core/analytics/insightsReport";
 import type { PostMetricInput } from "../src/core/analytics/weeklyReport";
 
 const TZ = "Europe/Moscow";
@@ -191,5 +204,130 @@ describe("buildInsights", () => {
       TZ,
     );
     expect(ins.trend.viewsDirection).toBe("up");
+  });
+});
+
+describe("lengthBucket", () => {
+  it("границы short/medium/long", () => {
+    expect(lengthBucket(CHAR_LEN_SHORT_MAX - 1)).toBe("short");
+    expect(lengthBucket(CHAR_LEN_SHORT_MAX)).toBe("medium");
+    expect(lengthBucket(CHAR_LEN_LONG_MIN - 1)).toBe("medium");
+    expect(lengthBucket(CHAR_LEN_LONG_MIN)).toBe("long");
+  });
+});
+
+describe("contentDimensionStats", () => {
+  it("средний ERR и число постов по медиа", () => {
+    const stats = contentDimensionStats([
+      metric({ hasMedia: true, reactions: 10, replies: 2 }), // ERR 0.12
+      metric({ hasMedia: false, reactions: 0, replies: 0 }), // ERR 0
+    ]);
+    expect(stats.withMedia.count).toBe(1);
+    expect(stats.withMedia.avgErr).toBeCloseTo(0.12);
+    expect(stats.withoutMedia.count).toBe(1);
+    expect(stats.withoutMedia.avgErr).toBe(0);
+  });
+
+  it("пустой вход → нули по всем группам", () => {
+    const stats = contentDimensionStats([]);
+    expect(stats.withMedia).toEqual({ count: 0, avgErr: 0 });
+    expect(stats.length.short).toEqual({ count: 0, avgErr: 0 });
+  });
+});
+
+/** 4 поста ПН 10:00 МСК (morning) с разным откликом — база для советника/отчёта. */
+function currentWindow(): PostMetricInput[] {
+  return [
+    metric({ messageId: 1, views: 100, reactions: 2, replies: 0 }), // ERR 0.02
+    metric({ messageId: 2, views: 100, reactions: 20, replies: 0 }), // ERR 0.20 (лучший)
+    metric({ messageId: 3, views: 100, reactions: 10, replies: 0 }), // ERR 0.10
+    metric({ messageId: 4, views: 5000, reactions: 1, replies: 0 }), // выброс
+  ];
+}
+
+describe("buildAdvice", () => {
+  it(`меньше ${String(MIN_POSTS_FOR_ADVICE)} постов → только not_enough_data`, () => {
+    const ins = buildInsights([metric(), metric({ messageId: 2 })], [], TZ);
+    const advice = buildAdvice(ins, contentDimensionStats([]), null);
+    expect(advice).toEqual([{ kind: "not_enough_data", priority: 0, count: 2 }]);
+  });
+
+  it("достаточно данных → best_slot, trend, outliers (по приоритету)", () => {
+    const current = currentWindow();
+    const ins = buildInsights(current, [], TZ);
+    const advice = buildAdvice(ins, contentDimensionStats(current), null);
+    const kinds = advice.map((a) => a.kind);
+    expect(kinds).toContain("best_slot");
+    expect(kinds).toContain("trend");
+    expect(kinds).toContain("outliers");
+    expect(kinds.indexOf("best_slot")).toBeLessThan(kinds.indexOf("trend"));
+    expect(kinds.indexOf("trend")).toBeLessThan(kinds.indexOf("outliers"));
+  });
+
+  it("нативный топ-час в том же слоте → matchesOwn=true, Δ подписчиков считается", () => {
+    const current = currentWindow();
+    const ins = buildInsights(current, [], TZ);
+    const snap: SnapshotSummary = {
+      nativeTopHoursLocal: [9, 10],
+      subscribers: 500,
+      previousSubscribers: 480,
+    };
+    const advice = buildAdvice(ins, contentDimensionStats(current), snap);
+    const native = advice.find((a) => a.kind === "native_hours");
+    expect(native?.kind === "native_hours" && native.matchesOwn).toBe(true);
+    const trend = advice.find((a) => a.kind === "trend");
+    expect(trend?.kind === "trend" && trend.subscribersDelta).toBe(20);
+  });
+
+  it("нативный топ-час в другом слоте → matchesOwn=false", () => {
+    const current = currentWindow();
+    const ins = buildInsights(current, [], TZ);
+    const snap: SnapshotSummary = {
+      nativeTopHoursLocal: [20], // вечер, а лучший слот — утро
+      subscribers: null,
+      previousSubscribers: null,
+    };
+    const advice = buildAdvice(ins, contentDimensionStats(current), snap);
+    const native = advice.find((a) => a.kind === "native_hours");
+    expect(native?.kind === "native_hours" && native.matchesOwn).toBe(false);
+  });
+
+  it("медиа заходит лучше → content_media prefer=with", () => {
+    const current = [
+      metric({ messageId: 1, hasMedia: true, reactions: 30, replies: 0 }),
+      metric({ messageId: 2, hasMedia: true, reactions: 28, replies: 0 }),
+      metric({ messageId: 3, hasMedia: false, reactions: 2, replies: 0 }),
+      metric({ messageId: 4, hasMedia: false, reactions: 1, replies: 0 }),
+    ];
+    const ins = buildInsights(current, [], TZ);
+    const advice = buildAdvice(ins, contentDimensionStats(current), null);
+    const media = advice.find((a) => a.kind === "content_media");
+    expect(media?.kind === "content_media" && media.prefer).toBe("with");
+  });
+});
+
+describe("buildInsightsReport", () => {
+  it("пустые данные → понятная заглушка, без Markdown-эмфазы", () => {
+    const empty: Insights = buildInsights([], [], TZ);
+    const txt = buildInsightsReport(empty, [], []);
+    expect(txt).toContain("не найдено");
+    expect(txt).not.toMatch(/[*_]/);
+  });
+
+  it("содержит разделы «что зашло / лучшее время / рекомендации» без Markdown-эмфазы", () => {
+    const current = currentWindow();
+    const ins = buildInsights(current, [], TZ);
+    const advice = buildAdvice(ins, contentDimensionStats(current), {
+      nativeTopHoursLocal: [19],
+      subscribers: 500,
+      previousSubscribers: 490,
+    });
+    const txt = buildInsightsReport(ins, advice, [19]);
+    expect(txt).toContain("📈 Рост канала");
+    expect(txt).toContain("🔥 Что зашло");
+    expect(txt).toContain("🕐 Лучшее время");
+    expect(txt).toContain("💡 Рекомендации");
+    expect(txt).toContain("Нативно");
+    expect(txt).not.toMatch(/[*_]/);
   });
 });

@@ -7,11 +7,22 @@ import {
 } from "../../db/repositories/postMetricRepository.js";
 import {
   createStatSnapshot,
-  getLatestStatSnapshot,
+  listRecentStatSnapshots,
   type StatSnapshotRow,
 } from "../../db/repositories/channelStatSnapshotRepository.js";
 import { buildInsights, type Insights } from "../../core/analytics/insights.js";
 import { periodStat } from "../../core/analytics/trend.js";
+import {
+  contentDimensionStats,
+  type ContentDimensionStats,
+} from "../../core/analytics/dimensions.js";
+import {
+  buildAdvice,
+  type SnapshotSummary,
+} from "../../core/analytics/advisor.js";
+import { buildInsightsReport } from "../../core/analytics/insightsReport.js";
+import { sortTopHours } from "../../core/analytics/topHours.js";
+import { localDateParts } from "../../core/schedule/localDate.js";
 import { isMtprotoConfigured, type MtprotoConfig } from "./mtprotoConfig.js";
 
 /**
@@ -38,16 +49,21 @@ export interface StatSnapshotDeps {
   mtproto: MtprotoConfig;
 }
 
-/** Выводы аналитики канала + последний снимок охвата (для 12c). */
+/**
+ * Выводы аналитики канала + контентные измерения + два последних снимка охвата (для 12c).
+ * `latestSnapshot`/`previousSnapshot` — для нативных часов и Δ подписчиков между снимками.
+ */
 export interface ChannelIntelligence {
   readonly insights: Insights;
+  readonly contentStats: ContentDimensionStats;
   readonly latestSnapshot: StatSnapshotRow | null;
+  readonly previousSnapshot: StatSnapshotRow | null;
 }
 
 /**
  * Строит выводы канала из уже собранных метрик (роль 1, БД-only). Делит два окна по
- * 7 дней (текущее против прошлого) для тренда, отдаёт `Insights` ядра 12a и последний
- * снимок охвата. `now` инъектируется для тестируемости.
+ * 7 дней (текущее против прошлого) для тренда, отдаёт `Insights` ядра 12a, контентные
+ * измерения текущего окна и два последних снимка охвата. `now` инъектируется для тестов.
  */
 export async function buildChannelIntelligence(
   prisma: PrismaClient,
@@ -64,8 +80,61 @@ export async function buildChannelIntelligence(
   const previous = twoWeeks.filter((m) => m.postedAt < currentSince);
 
   const insights = buildInsights(current, previous, timezone);
-  const latestSnapshot = await getLatestStatSnapshot(prisma, channelId);
-  return { insights, latestSnapshot };
+  const contentStats = contentDimensionStats(current);
+  const snapshots = await listRecentStatSnapshots(prisma, channelId, 2);
+  return {
+    insights,
+    contentStats,
+    latestSnapshot: snapshots[0] ?? null,
+    previousSnapshot: snapshots[1] ?? null,
+  };
+}
+
+/**
+ * Приводит нативные лучшие часы Telegram (UTC, как отдаёт стата) к часам в поясе канала
+ * и собирает сводку снимка для советника. Пустой снимок → нет нативных часов.
+ */
+function toSnapshotSummary(
+  latest: StatSnapshotRow | null,
+  previous: StatSnapshotRow | null,
+  timezone: string,
+): SnapshotSummary {
+  const nativeTopHoursLocal = sortTopHours(latest?.topHours ?? []).map((h) =>
+    utcHourToLocal(h.hour, timezone),
+  );
+  return {
+    nativeTopHoursLocal,
+    subscribers: latest?.subscribers ?? null,
+    previousSubscribers: previous?.subscribers ?? null,
+  };
+}
+
+/** Переводит «час суток UTC» (0..23) в час суток в поясе канала (детерминированно). */
+function utcHourToLocal(utcHour: number, timezone: string): number {
+  // Любой опорный день — важен только сдвиг пояса; берём фиксированную дату.
+  const at = new Date(Date.UTC(2001, 0, 1, utcHour, 0, 0));
+  return localDateParts(at, timezone).hour;
+}
+
+/**
+ * Отчёт «📈 Рост» (роль 1, БД-only, 0 токенов): поверх `buildChannelIntelligence` строит
+ * рекомендации советника и форматирует человекочитаемый текст. Используется и на экране
+ * меню, и как секция еженедельного отчёта.
+ */
+export async function buildGrowthReport(
+  prisma: PrismaClient,
+  channelId: string,
+  timezone: string,
+  now: Date = new Date(),
+): Promise<string> {
+  const intel = await buildChannelIntelligence(prisma, channelId, timezone, now);
+  const summary = toSnapshotSummary(
+    intel.latestSnapshot,
+    intel.previousSnapshot,
+    timezone,
+  );
+  const advice = buildAdvice(intel.insights, intel.contentStats, summary);
+  return buildInsightsReport(intel.insights, advice, summary.nativeTopHoursLocal);
 }
 
 /**

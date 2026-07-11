@@ -16,6 +16,7 @@ import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js
 import { postStatus } from "../../../core/schedule/postStatus.js";
 import { shouldWarnContentEnding } from "../../../core/analytics/contentEnding.js";
 import { isMtprotoConfigured } from "../../../services/analytics/mtprotoConfig.js";
+import { buildGrowthReport } from "../../../services/analytics/contentIntelligenceService.js";
 import {
   getTextPoolDetail,
   listButtonPools,
@@ -101,6 +102,8 @@ export const MAIN_SECTIONS: readonly (readonly Section[])[] = [
   ],
   // Шаг 11a — «где мы в плане»: текущая неделя/день + что прошло/впереди.
   [{ label: "📅 Календарь", data: encodeCb("cal") }],
+  // Шаг 12c — Content Intelligence: выводы «что зашло / когда / тренд» + рекомендации.
+  [{ label: "📈 Рост", data: encodeCb("grow") }],
   // Шаг 10b — флагманская фича: широкая кнопка на всю строку, чтобы выделялась.
   [{ label: "🤖 AI-пост", data: encodeCb("aigen") }],
   [
@@ -975,6 +978,31 @@ export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
   rows.push(navRow());
 
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/**
+ * Экран «📈 Рост» (Шаг 12c) — Content Intelligence: выводы «что зашло / когда лучше
+ * публиковать / тренд охвата» + рекомендации советника. Читает из БД (метрики 7c/12b +
+ * снимки охвата), 0 токенов. Текст собирает `buildGrowthReport` (плейн, без Markdown —
+ * `editMessageText` идёт без parse_mode). Данные наполняет джоб снимка (22:00 МСК) и
+ * еженедельный отчёт; без MTProto таблицы пустеют → отчёт покажет понятную заглушку.
+ */
+export async function renderGrowth(deps: AdminDeps): Promise<Screen> {
+  const channel = await resolvePostingChannelSelected(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const report = await buildGrowthReport(deps.prisma, channel.id, channel.timezone);
+  const hint = isMtprotoConfigured(deps.mtproto)
+    ? "\n\nОбновляется автоматически: снимок охвата — ежедневно, полный отчёт — в ПН 09:30 МСК."
+    : "\n\n⚠️ MTProto не настроен — метрики не собираются, выводы будут скудными. Включи его в «📊 Аналитика».";
+  return {
+    text: `${report}${hint}`,
+    keyboard: buildKeyboard([
+      [{ label: "📊 Аналитика", data: encodeCb("an") }],
+      navRow(),
+    ]),
+  };
 }
 
 /** Экран — контент-план: список недель с числом постов (Шаг 6.5). */

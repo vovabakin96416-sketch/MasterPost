@@ -3,6 +3,23 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 12c ГОТОВ** (typecheck 0, lint 0, vitest **310/310** [+10], build ок, миграций НЕТ):
+ВЫВОД Content Intelligence — впервые ПОКАЗЫВАЕТ владельцу выводы (еженедельный отчёт + экран «📈 Рост»).
+Ядро 12a считает, 12b/12b-2 наполняют — 12c форматирует. 0 токенов, всё из готовых таблиц. Сделан ЦЕЛИКОМ.
+- ЯДРО: `dimensions.ts` += `contentDimensionStats`/`lengthBucket` (ERR по медиа/кнопкам/длине);
+  `advisor.ts` (`buildAdvice(insights, contentStats, snapshot)` → `Advice[]`, факты+приоритет: слоты,
+  нативные часы `matchesOwn`, тренд+Δ подписчиков, контент, выбросы; порог `MIN_POSTS_FOR_ADVICE=3`);
+  `insightsReport.ts` (`buildInsightsReport` → текст «зашло/провалилось/время/рекомендации», ⚠️ БЕЗ
+  Markdown-эмфазы — один текст и в Markdown-отчёт, и в плейн-экран); `topHours.ts` += `sortTopHours`.
+- РЕПОЗИТОРИЙ: `listRecentStatSnapshots` (2 снимка для Δ подписчиков); `getLatestStatSnapshot` — обёртка.
+- СЕРВИС: `buildChannelIntelligence` += `contentStats` + `latest/previousSnapshot`; новый
+  `buildGrowthReport` (БД-only, нативные часы UTC→пояс канала, → советник → форматтер).
+- ВЫВОД: секция в `weeklyReportService` после чисел 7c + экран `renderGrowth` (кнопка `grow` в меню).
+- ⚠️ Прод: выводы скудны без данных — их наполняют джоб снимка (22:00 МСК) и отчёт (ПН 09:30 МСК),
+  оба требуют MTProto + прав админа канала. Тренд по просмотрам (12a) считается по всему окну с выбросами.
+- ⏭ Дальше — **12d** (AI-нарратив: тот же отчёт голосом канала через Haiku, опц. тумблер, фолбэк на 12c)
+  либо **12e** (Telemetr за адаптером `MarketDataProvider`).
+
 **Шаг 12b-2 ГОТОВ** (typecheck 0, lint 0, vitest **300/300** [+9], build ок, миграция применена локально):
 НАТИВНАЯ СТАТА Telegram — лучшие часы канала из `stats.getBroadcastStats`. Отложенный хвост 12b.
 - ЯДРО (`core/analytics/topHours.ts`, +9 тестов): чистый парсер графа Telegram (`DataJSON.data`,
@@ -251,7 +268,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 300/300**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 310/310**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

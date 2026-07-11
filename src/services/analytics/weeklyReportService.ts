@@ -1,6 +1,7 @@
 import { getPostingChannel } from "../../db/repositories/channelRepository.js";
 import { upsertPostMetric } from "../../db/repositories/postMetricRepository.js";
 import { buildWeeklyReport } from "../../core/analytics/weeklyReport.js";
+import { buildGrowthReport } from "./contentIntelligenceService.js";
 import {
   isMtprotoConfigured,
   type FullMtprotoConfig,
@@ -75,7 +76,11 @@ async function collectReport(
     for (const metric of metrics) {
       await upsertPostMetric(deps.prisma, channelId, metric);
     }
-    return buildWeeklyReport(metrics, timezone);
+    const weekly = buildWeeklyReport(metrics, timezone);
+    // Шаг 12c: после сырых чисел — секция Content Intelligence (выводы/рекомендации).
+    // Метрики только что записаны в БД, так что отчёт читает свежие данные. 0 токенов.
+    const growth = await buildGrowthReport(deps.prisma, channelId, timezone);
+    return `${weekly}\n\n───────────────\n\n${growth}`;
   } finally {
     // Именно destroy(): disconnect() оставляет жить update-loop GramJS, и при
     // мёртвой сессии он бесконечно спамит тайм-аутами в логи.
