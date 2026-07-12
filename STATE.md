@@ -3,6 +3,29 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 12e-2 ГОТОВ** (typecheck 0, lint 0, vitest **341/341** [+10], build ок, миграций НЕТ):
+РЫНОЧНЫЕ ДАННЫЕ (Telemetr), вторая половина шва — динамика подписчиков + секция «🌍 Рынок»
+в еженедельном отчёте. Скоуп согласован с владельцем; похожие каналы и бенчмарк ниши ОТЛОЖЕНЫ
+(эндпоинт `/v1/channels/similar` при разведке дважды упал по таймауту + риск 429). 0 AI-вызовов.
+План: `.claude/plans/12e2-market-telemetr.md`.
+- РАЗВЕДКА API: `/channels/subscribers?group=day` → `[{date, participantsCount}]` (новые
+  сверху); ⚠️ окно ровно в месяц → HTTP 400, 28 дней — ок; даты `YYYY-MM-DD HH:MM:SS`.
+- ЯДРО (`core/market/`): `subscriberDynamics.ts` (НОВЫЙ — `computeSubscriberDynamics` →
+  `{current, delta7d, delta28d}`, база Δ = последняя точка не моложе границы окна, истории
+  меньше окна → null) · `marketData.ts` (`SubscriberPoint`, провайдер += `fetchSubscriberHistory`)
+  · `marketCache.ts` (кэш += опц. `subscribers`, формат 12e-1 валиден) · `marketSection.ts`
+  (строка `📈 Подписчики за 7д: +3 · за 28д: +14`, знак всегда).
+- АДАПТЕР: общий `requestJson` + `fetchSubscriberHistory` (окно 28 дней, те же правила
+  деградации → null + warn). СЕРВИС: `getMarketData` (стата + ряд, 2 запроса раз в 12ч;
+  упал только ряд → ряд из старого кэша).
+- ОТЧЁТ: `WeeklyReportDeps` += `telemetrApiKey?`; `collectReport` принимает канал целиком
+  (`ReportChannel`, нужен username) и добавляет секцию ПОСЛЕ нарратива (в Haiku рынок не
+  скармливаем). Прокинуто в планировщик и тест-кнопку `anrep`.
+- ⚠️ Прод: новых env НЕТ (ключ положен в 12e-1). Строка динамики появится после протухания
+  кэша (TTL 12ч); секция в отчёте — в ближайший ПН 09:30 МСК или по тест-кнопке.
+- ⏭ Дальше — **12e-3** (похожие каналы + бенчмарк ниши, когда эндпоинт станет надёжнее)
+  либо следующий шаг роадмапа (`ПЛАН.md`).
+
 **Шаг 12e-1 ГОТОВ** (typecheck 0, lint 0, vitest **331/331** [+11], build ок, миграций НЕТ):
 РЫНОЧНЫЕ ДАННЫЕ (Telemetr) за адаптером `MarketDataProvider` — взгляд СНАРУЖИ (12a–12d смотрят
 внутрь через MTProto). Скоуп по шву: ОДНА метрика (внешний взгляд `/channels/stat` на свой канал)
@@ -308,7 +331,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 331/331**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 341/341**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

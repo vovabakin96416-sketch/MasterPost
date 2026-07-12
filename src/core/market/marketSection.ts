@@ -1,4 +1,5 @@
 import type { ChannelMarketStat } from "./marketData.js";
+import type { SubscriberDynamics } from "./subscriberDynamics.js";
 
 /**
  * Форматтер секции «🌍 Рынок» (Шаг 12e) — ЧИСТАЯ логика (без Telegram/БД/HTTP).
@@ -19,18 +20,44 @@ function pctFromPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
+/** Дельта со знаком всегда: рост «+3», отток «-2» — «сохнет» видно сразу. */
+function signed(value: number): string {
+  return value >= 0 ? `+${String(value)}` : String(value);
+}
+
+/** Строка динамики подписчиков (12e-2); нет ни одной дельты → строки нет. */
+function dynamicsLine(dynamics: SubscriberDynamics | null): string | null {
+  if (dynamics === null) {
+    return null;
+  }
+  const parts: string[] = [];
+  if (dynamics.delta7d !== null) {
+    parts.push(`за 7д: ${signed(dynamics.delta7d)}`);
+  }
+  if (dynamics.delta28d !== null) {
+    parts.push(`за 28д: ${signed(dynamics.delta28d)}`);
+  }
+  return parts.length === 0 ? null : `📈 Подписчики ${parts.join(" · ")}`;
+}
+
 /**
  * Собирает текст секции «🌍 Рынок». Если у владельца есть свой ERR (снимок 12b),
  * рядом с рыночным показывается сравнение — иначе только внешние цифры.
+ * `dynamics` (12e-2) — рост/отток подписчиков; нет данных → строки просто нет.
  */
 export function buildMarketSection(
   stat: ChannelMarketStat,
   own: OwnMetrics,
+  dynamics: SubscriberDynamics | null = null,
 ): string {
   const lines = ["🌍 Рынок (Telemetr)"];
   lines.push(
     `👥 Подписчиков: ${String(stat.subscribers)} · охват поста: ~${String(stat.avgPostReach)} · за день: ${String(stat.dailyReach)}`,
   );
+  const growth = dynamicsLine(dynamics);
+  if (growth !== null) {
+    lines.push(growth);
+  }
   const err = `📊 ERR по Telemetr: ${pctFromPercent(stat.errPercent)}`;
   lines.push(
     own.avgErr7d === null

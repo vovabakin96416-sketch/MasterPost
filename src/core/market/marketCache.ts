@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ChannelMarketStat } from "./marketData.js";
+import type { ChannelMarketStat, SubscriberPoint } from "./marketData.js";
 
 /**
  * Кэш рыночного среза (Шаг 12e) — ЧИСТАЯ логика без БД.
@@ -16,7 +16,9 @@ export const MARKET_CACHE_KEY = "market_stat_cache";
 /** TTL кэша — 12 часов: рыночные агрегаты меняются медленно, лимит бережём. */
 export const MARKET_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
-/** Схема того, что лежит в Setting: момент снятия + сам срез. */
+/** Схема того, что лежит в Setting: момент снятия + сам срез. Поле
+ * `subscribers` (ряд для динамики, 12e-2) ОПЦИОНАЛЬНО — кэш формата 12e-1
+ * без него остаётся валидным, миграция не нужна. */
 const cachedStatSchema = z.object({
   fetchedAt: z.string().min(1),
   stat: z.object({
@@ -26,12 +28,17 @@ const cachedStatSchema = z.object({
     dailyReach: z.number(),
     mentionsCount: z.number(),
   }),
+  subscribers: z
+    .array(z.object({ date: z.string().min(1), count: z.number() }))
+    .optional(),
 });
 
 /** Разобранный кэш: когда снят и что снято. */
 export interface MarketStatCache {
   readonly fetchedAt: Date;
   readonly stat: ChannelMarketStat;
+  /** Ряд подписчиков (12e-2); `null` — кэш старого формата или ряд не собрался. */
+  readonly subscribers: readonly SubscriberPoint[] | null;
 }
 
 /**
@@ -47,7 +54,11 @@ export function parseMarketCache(value: unknown): MarketStatCache | null {
   if (Number.isNaN(fetchedAt.getTime())) {
     return null;
   }
-  return { fetchedAt, stat: parsed.data.stat };
+  return {
+    fetchedAt,
+    stat: parsed.data.stat,
+    subscribers: parsed.data.subscribers ?? null,
+  };
 }
 
 /** Свежий ли кэш: моложе TTL относительно `now`. */

@@ -1225,6 +1225,7 @@ async function routeCallback(
         mtproto: deps.mtproto,
         anthropicApiKey: deps.anthropicApiKey,
         timeoutMs: deps.timeoutMs,
+        telemetrApiKey: deps.telemetrApiKey,
       });
       return;
 

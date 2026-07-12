@@ -8,6 +8,7 @@ import { getLatestStatSnapshot } from "../../db/repositories/channelStatSnapshot
 import type {
   ChannelMarketStat,
   MarketDataProvider,
+  SubscriberPoint,
 } from "../../core/market/marketData.js";
 import {
   MARKET_CACHE_KEY,
@@ -15,11 +16,13 @@ import {
   parseMarketCache,
 } from "../../core/market/marketCache.js";
 import { buildMarketSection } from "../../core/market/marketSection.js";
+import { computeSubscriberDynamics } from "../../core/market/subscriberDynamics.js";
 
 /**
  * Оркестратор рыночного среза (Шаг 12e): кэш в `Setting` + провайдер за
- * интерфейсом. Экран «📈 Рост» зовёт `buildMarketSectionText` при каждом
- * открытии — но лимит Telemetr бережёт кэш (TTL 12ч, `marketCache.ts`).
+ * интерфейсом. `buildMarketSectionText` зовут экран «📈 Рост» (каждое открытие)
+ * и еженедельный отчёт (12e-2) — но лимит Telemetr бережёт кэш (TTL 12ч,
+ * `marketCache.ts`): полное обновление = 2 запроса (стата + ряд подписчиков).
  *
  * Мягкая деградация по цепочке: нет провайдера (ключа) / нет публичной ссылки
  * канала / запрос упал и кэша нет → `null` — секции «Рынок» просто нет,
@@ -49,23 +52,30 @@ function publicRef(channel: MarketChannelRef): string | null {
   return null;
 }
 
+/** Рыночный срез целиком: стата + ряд подписчиков (12e-2, может не собраться). */
+export interface MarketData {
+  readonly stat: ChannelMarketStat;
+  readonly subscribers: readonly SubscriberPoint[] | null;
+}
+
 /**
- * Отдаёт рыночный срез канала: свежий кэш → без запроса; протух → запрос к
- * провайдеру и обновление кэша; запрос упал → протухший кэш (старые данные
- * лучше, чем ничего), совсем пусто → `null`.
+ * Отдаёт рыночный срез канала: свежий кэш → без запросов; протух → запросы к
+ * провайдеру (стата + ряд подписчиков) и обновление кэша; стата упала →
+ * протухший кэш (старые данные лучше, чем ничего), совсем пусто → `null`.
+ * Упал только ряд подписчиков → стата свежая, ряд берём из старого кэша.
  */
-export async function getMarketStat(
+export async function getMarketData(
   prisma: PrismaClient,
   logger: Logger,
   channel: MarketChannelRef,
   provider: MarketDataProvider,
   now: Date = new Date(),
-): Promise<ChannelMarketStat | null> {
+): Promise<MarketData | null> {
   const cached = parseMarketCache(
     await getJsonSetting(prisma, channel.id, MARKET_CACHE_KEY),
   );
   if (cached !== null && isCacheFresh(cached.fetchedAt, now)) {
-    return cached.stat;
+    return { stat: cached.stat, subscribers: cached.subscribers };
   }
 
   const ref = publicRef(channel);
@@ -76,20 +86,28 @@ export async function getMarketStat(
   if (fresh === null) {
     if (cached !== null) {
       logger.warn("рыночный срез: запрос не удался, показываю протухший кэш");
+      return { stat: cached.stat, subscribers: cached.subscribers };
     }
-    return cached?.stat ?? null;
+    return null;
   }
-  // Спред — Prisma InputJsonValue не принимает интерфейс без индекс-сигнатуры.
+  // 12e-2: ряд подписчиков — второй запрос того же обновления (2 запроса / 12ч).
+  const subscribers =
+    (await provider.fetchSubscriberHistory(ref)) ?? cached?.subscribers ?? null;
+  // Спреды — Prisma InputJsonValue не принимает интерфейс без индекс-сигнатуры.
   await setJsonSetting(prisma, channel.id, MARKET_CACHE_KEY, {
     fetchedAt: now.toISOString(),
     stat: { ...fresh },
+    ...(subscribers === null
+      ? {}
+      : { subscribers: subscribers.map((p) => ({ ...p })) }),
   });
-  return fresh;
+  return { stat: fresh, subscribers };
 }
 
 /**
- * Текст секции «🌍 Рынок» для экрана «📈 Рост»: рыночный срез + сравнение со
- * своим ERR из последнего снимка охвата (12b). Нет данных → `null` (секции нет).
+ * Текст секции «🌍 Рынок» (экран «📈 Рост» + еженедельный отчёт, 12e-2):
+ * рыночный срез + динамика подписчиков + сравнение со своим ERR из последнего
+ * снимка охвата (12b). Нет данных → `null` (секции нет).
  */
 export async function buildMarketSectionText(
   prisma: PrismaClient,
@@ -101,10 +119,18 @@ export async function buildMarketSectionText(
   if (provider === null) {
     return null;
   }
-  const stat = await getMarketStat(prisma, logger, channel, provider, now);
-  if (stat === null) {
+  const data = await getMarketData(prisma, logger, channel, provider, now);
+  if (data === null) {
     return null;
   }
   const snapshot = await getLatestStatSnapshot(prisma, channel.id);
-  return buildMarketSection(stat, { avgErr7d: snapshot?.avgErr7d ?? null });
+  const dynamics =
+    data.subscribers === null
+      ? null
+      : computeSubscriberDynamics(data.subscribers, now);
+  return buildMarketSection(
+    data.stat,
+    { avgErr7d: snapshot?.avgErr7d ?? null },
+    dynamics,
+  );
 }

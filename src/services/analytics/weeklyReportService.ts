@@ -3,6 +3,8 @@ import { upsertPostMetric } from "../../db/repositories/postMetricRepository.js"
 import { buildWeeklyReport } from "../../core/analytics/weeklyReport.js";
 import { buildGrowthReport } from "./contentIntelligenceService.js";
 import { narrateGrowthReport } from "../ai/growthNarrativeService.js";
+import { createTelemetrProvider } from "../market/telemetrProvider.js";
+import { buildMarketSectionText } from "../market/marketStatService.js";
 import {
   isMtprotoConfigured,
   type FullMtprotoConfig,
@@ -27,10 +29,21 @@ export interface WeeklyReportDeps extends AnalyticsDeps {
   anthropicApiKey?: string | undefined;
   // Шаг 11b: таймаут вызова Claude (мс); undefined → DEFAULT_AI_TIMEOUT_MS.
   timeoutMs?: number | undefined;
+  // Шаг 12e-2: ключ Telemetr для секции «🌍 Рынок» в отчёте. undefined →
+  // секции просто нет (мягко, как telemetrApiKey на экране «📈 Рост»).
+  telemetrApiKey?: string | undefined;
 }
 
 /** Окно отчёта — последние 7 дней (как `timedelta(days=7)` в Python). */
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Канал в объёме отчёта: адресат MTProto + ссылка для рыночного среза (12e-2). */
+interface ReportChannel {
+  readonly id: string;
+  readonly chatId: string;
+  readonly timezone: string;
+  readonly username: string | null;
+}
 
 const MTPROTO_NOT_CONFIGURED = [
   "⚠️ Отчёт по просмотрам выключен — MTProto не настроен.",
@@ -66,9 +79,7 @@ function isSessionRevokedError(err: unknown): boolean {
  */
 async function collectReport(
   deps: WeeklyReportDeps,
-  channelId: string,
-  chatId: string,
-  timezone: string,
+  channel: ReportChannel,
   cfg: FullMtprotoConfig,
 ): Promise<string> {
   const { createMtprotoClient, fetchRecentPostMetrics } = await import(
@@ -78,14 +89,14 @@ async function collectReport(
   try {
     await client.connect();
     const since = new Date(Date.now() - WEEK_MS);
-    const metrics = await fetchRecentPostMetrics(client, chatId, since);
+    const metrics = await fetchRecentPostMetrics(client, channel.chatId, since);
     for (const metric of metrics) {
-      await upsertPostMetric(deps.prisma, channelId, metric);
+      await upsertPostMetric(deps.prisma, channel.id, metric);
     }
-    const weekly = buildWeeklyReport(metrics, timezone);
+    const weekly = buildWeeklyReport(metrics, channel.timezone);
     // Шаг 12c: после сырых чисел — секция Content Intelligence (выводы/рекомендации).
     // Метрики только что записаны в БД, так что отчёт читает свежие данные. 0 токенов.
-    const growth = await buildGrowthReport(deps.prisma, channelId, timezone);
+    const growth = await buildGrowthReport(deps.prisma, channel.id, channel.timezone);
     // Шаг 12d: при ВКЛ тумблере «🧠 AI-пересказ» те же факты пересказывает Haiku
     // голосом канала; выключен/нет ключа/бюджет/ошибка → сухой текст без изменений.
     const narrated = await narrateGrowthReport(
@@ -95,10 +106,22 @@ async function collectReport(
         apiKey: deps.anthropicApiKey,
         timeoutMs: deps.timeoutMs,
       },
-      channelId,
+      channel.id,
       growth,
     );
-    return `${weekly}\n\n───────────────\n\n${narrated}`;
+    // Шаг 12e-2: секция «🌍 Рынок» — та же, что на экране «📈 Рост» (реюз, кэш
+    // Setting TTL 12ч бережёт лимит). Без ключа/данных секции нет, отчёт как раньше.
+    const market = await buildMarketSectionText(
+      deps.prisma,
+      deps.logger,
+      channel,
+      createTelemetrProvider({
+        apiKey: deps.telemetrApiKey,
+        logger: deps.logger,
+      }),
+    );
+    const marketBlock = market === null ? "" : `\n\n${market}`;
+    return `${weekly}\n\n───────────────\n\n${narrated}${marketBlock}`;
   } finally {
     // Именно destroy(): disconnect() оставляет жить update-loop GramJS, и при
     // мёртвой сессии он бесконечно спамит тайм-аутами в логи.
@@ -122,9 +145,7 @@ export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
   try {
     const report = await collectReport(
       deps,
-      channel.id,
-      channel.chatId,
-      channel.timezone,
+      { ...channel, chatId: channel.chatId },
       cfg,
     );
     await sendToAdmin(deps, report);
@@ -156,9 +177,7 @@ export async function sendWeeklyReportNow(deps: WeeklyReportDeps): Promise<void>
   try {
     const report = await collectReport(
       deps,
-      channel.id,
-      channel.chatId,
-      channel.timezone,
+      { ...channel, chatId: channel.chatId },
       cfg,
     );
     await sendToAdmin(deps, report);

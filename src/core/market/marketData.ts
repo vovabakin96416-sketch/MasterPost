@@ -25,6 +25,16 @@ export interface ChannelMarketStat {
 }
 
 /**
+ * Точка ряда подписчиков (Шаг 12e-2): дата `YYYY-MM-DD` + число подписчиков
+ * на эту дату. Ряд может приходить с дырками и в любом порядке — выводы из
+ * него считает чистое ядро `subscriberDynamics.ts`.
+ */
+export interface SubscriberPoint {
+  readonly date: string;
+  readonly count: number;
+}
+
+/**
  * Провайдер рыночных данных. `channelRef` — публичная ссылка канала
  * (`@username`). Нет данных / ошибка / лимит API → `null`: рыночные фичи
  * гаснут, бот работает как раньше (мягкая деградация, как у Pexels).
@@ -32,4 +42,8 @@ export interface ChannelMarketStat {
 export interface MarketDataProvider {
   readonly name: string;
   fetchChannelStat(channelRef: string): Promise<ChannelMarketStat | null>;
+  /** Ряд подписчиков по дням за последние ~4 недели (12e-2). */
+  fetchSubscriberHistory(
+    channelRef: string,
+  ): Promise<readonly SubscriberPoint[] | null>;
 }

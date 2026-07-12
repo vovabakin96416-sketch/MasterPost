@@ -80,6 +80,8 @@ async function main(): Promise<void> {
     // Шаг 12d: AI-пересказ секции роста в отчёте (тумблер в меню; без ключа — эвристика).
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     timeoutMs: env.AI_TIMEOUT_MS,
+    // Шаг 12e-2: секция «🌍 Рынок» в отчёте (без ключа секции просто нет).
+    telemetrApiKey: env.TELEMETR_API_KEY,
   });
 
   const shutdown = (signal: string): void => {
