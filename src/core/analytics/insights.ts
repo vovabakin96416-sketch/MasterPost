@@ -32,8 +32,9 @@ export interface Insights {
 
 /**
  * Собирает выводы за текущее окно, сравнивая с прошлым. `tz` — пояс канала (для
- * группировки времени). Выбросы детектируются по просмотрам текущего окна и исключаются
- * из «лучший/худший» и из подбора времени.
+ * группировки времени). Выбросы детектируются по просмотрам КАЖДОГО окна отдельно
+ * и исключаются из «лучший/худший», подбора времени и тренда (12f: рекламный залёт
+ * в любом из окон не должен давать ложный «рост/падение охвата»).
  */
 export function buildInsights(
   current: readonly PostMetricInput[],
@@ -41,6 +42,9 @@ export function buildInsights(
   tz: string,
 ): Insights {
   const outlierFlags = flagViewOutliers(current.map((m) => m.views));
+  const previousFlags = flagViewOutliers(previous.map((m) => m.views));
+  const cleanCurrent = current.filter((_, i) => outlierFlags[i] !== true);
+  const cleanPrevious = previous.filter((_, i) => previousFlags[i] !== true);
 
   let best: RankedPost | null = null;
   let worst: RankedPost | null = null;
@@ -65,7 +69,7 @@ export function buildInsights(
     best,
     worst,
     bestTimes: rankPostingTimes(current, tz, outlierFlags),
-    trend: compareTrend(current, previous),
+    trend: compareTrend(cleanCurrent, cleanPrevious),
     outliers,
   };
 }

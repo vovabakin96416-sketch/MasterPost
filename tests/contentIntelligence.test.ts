@@ -205,6 +205,41 @@ describe("buildInsights", () => {
     );
     expect(ins.trend.viewsDirection).toBe("up");
   });
+
+  it("12f: виральный пост в текущем окне НЕ даёт ложный рост тренда", () => {
+    const flat = (id: number, views = 100): PostMetricInput =>
+      metric({ messageId: id, views, reactions: 0, replies: 0 });
+    const ins = buildInsights(
+      [flat(1), flat(2), flat(3), flat(4, 5000)], // выброс по просмотрам
+      [flat(11), flat(12), flat(13), flat(14)],
+      TZ,
+    );
+    expect(ins.outliers.map((o) => o.messageId)).toEqual([4]);
+    expect(ins.trend.viewsDirection).toBe("flat"); // без фильтра было бы up
+  });
+
+  it("12f: выброс в ПРОШЛОМ окне не завышает базу (нет ложного падения)", () => {
+    const flat = (id: number, views = 100): PostMetricInput =>
+      metric({ messageId: id, views, reactions: 0, replies: 0 });
+    const ins = buildInsights(
+      [flat(1), flat(2), flat(3), flat(4)],
+      [flat(11), flat(12), flat(13), flat(14, 5000)],
+      TZ,
+    );
+    expect(ins.trend.viewsDirection).toBe("flat"); // без фильтра было бы down
+  });
+
+  it(`12f: окно меньше ${String(MIN_SAMPLE_FOR_OUTLIERS)} постов — тренд по всем постам (флагов нет)`, () => {
+    const flat = (id: number, views: number): PostMetricInput =>
+      metric({ messageId: id, views, reactions: 0, replies: 0 });
+    const ins = buildInsights(
+      [flat(1, 300), flat(2, 10), flat(3, 10)], // 3 поста → детект выключен
+      [flat(11, 100)],
+      TZ,
+    );
+    expect(ins.outliers).toEqual([]);
+    expect(ins.trend.current.avgViews).toBeCloseTo((300 + 10 + 10) / 3);
+  });
 });
 
 describe("lengthBucket", () => {

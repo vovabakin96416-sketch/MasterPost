@@ -10,6 +10,10 @@ import {
   parseMarketCache,
 } from "../src/core/market/marketCache";
 import { buildMarketSection } from "../src/core/market/marketSection";
+import {
+  ANOMALY_MIN_ABS,
+  detectSubscriberAnomalies,
+} from "../src/core/market/subscriberAnomaly";
 import { computeSubscriberDynamics } from "../src/core/market/subscriberDynamics";
 import {
   createTelemetrProvider,
@@ -82,6 +86,75 @@ describe("buildMarketSection (Шаг 12e)", () => {
         { current: 417, delta7d: null, delta28d: null },
       ),
     ).not.toContain("📈 Подписчики");
+  });
+
+  it("12f: при аномалиях — строка-предупреждение с датами, без Markdown-эмфазы", () => {
+    const text = buildMarketSection(STAT, { avgErr7d: null }, null, [
+      { date: "2026-07-03", delta: 52 },
+      { date: "2026-07-09", delta: -31 },
+    ]);
+    expect(text).toContain(
+      "⚠️ Резкие скачки подписчиков: 2 за 28д (03.07, 09.07) — возможна накрутка или рекламный всплеск",
+    );
+    expect(text).not.toMatch(/[*_]/);
+  });
+
+  it("12f: без аномалий предупреждения нет; лишние даты обрезаются с «…»", () => {
+    expect(buildMarketSection(STAT, { avgErr7d: null })).not.toContain(
+      "Резкие скачки",
+    );
+    const many = buildMarketSection(STAT, { avgErr7d: null }, null, [
+      { date: "2026-07-01", delta: 20 },
+      { date: "2026-07-02", delta: 20 },
+      { date: "2026-07-03", delta: 20 },
+      { date: "2026-07-04", delta: 20 },
+    ]);
+    expect(many).toContain("4 за 28д (01.07, 02.07, 03.07…)");
+  });
+});
+
+describe("detectSubscriberAnomalies (Шаг 12f)", () => {
+  it("органический ряд (±1-2/день) → пусто", () => {
+    const points: SubscriberPoint[] = [
+      { date: "2026-07-09", count: 400 },
+      { date: "2026-07-10", count: 401 },
+      { date: "2026-07-11", count: 399 },
+      { date: "2026-07-12", count: 400 },
+    ];
+    expect(detectSubscriberAnomalies(points)).toEqual([]);
+  });
+
+  it("резкий суточный скачок вверх/вниз → аномалия с дельтой; порядок точек не важен", () => {
+    const points: SubscriberPoint[] = [
+      { date: "2026-07-12", count: 420 }, // -30 за сутки
+      { date: "2026-07-10", count: 400 },
+      { date: "2026-07-11", count: 450 }, // +50 за сутки
+    ];
+    expect(detectSubscriberAnomalies(points)).toEqual([
+      { date: "2026-07-11", delta: 50 },
+      { date: "2026-07-12", delta: -30 },
+    ]);
+  });
+
+  it(`малый скачок: ≥5% базы, но меньше ${String(ANOMALY_MIN_ABS)} человек → не аномалия`, () => {
+    const points: SubscriberPoint[] = [
+      { date: "2026-07-11", count: 40 },
+      { date: "2026-07-12", count: 45 }, // +12.5%, но всего +5
+    ];
+    expect(detectSubscriberAnomalies(points)).toEqual([]);
+  });
+
+  it("дырка в ряду: дельта за несколько дней → не суточный скачок", () => {
+    const points: SubscriberPoint[] = [
+      { date: "2026-07-01", count: 400 },
+      { date: "2026-07-12", count: 460 }, // +60, но за 11 дней
+    ];
+    expect(detectSubscriberAnomalies(points)).toEqual([]);
+  });
+
+  it("пустой / одноточечный ряд → пусто", () => {
+    expect(detectSubscriberAnomalies([])).toEqual([]);
+    expect(detectSubscriberAnomalies([{ date: "2026-07-12", count: 400 }])).toEqual([]);
   });
 });
 

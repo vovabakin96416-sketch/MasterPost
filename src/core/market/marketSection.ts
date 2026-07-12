@@ -1,4 +1,5 @@
 import type { ChannelMarketStat } from "./marketData.js";
+import type { SubscriberAnomaly } from "./subscriberAnomaly.js";
 import type { SubscriberDynamics } from "./subscriberDynamics.js";
 
 /**
@@ -40,15 +41,35 @@ function dynamicsLine(dynamics: SubscriberDynamics | null): string | null {
   return parts.length === 0 ? null : `📈 Подписчики ${parts.join(" · ")}`;
 }
 
+/** Сколько дат аномалий показываем в строке — дальше «…» (строка не резиновая). */
+const ANOMALY_DATES_SHOWN = 3;
+
+/** Дата `YYYY-MM-DD` → «ДД.ММ» для владельца. */
+function shortDate(date: string): string {
+  return `${date.slice(8, 10)}.${date.slice(5, 7)}`;
+}
+
+/** Строка-предупреждение о резких скачках подписчиков (12f); нет аномалий → нет строки. */
+function anomalyLine(anomalies: readonly SubscriberAnomaly[]): string | null {
+  if (anomalies.length === 0) {
+    return null;
+  }
+  const dates = anomalies.slice(0, ANOMALY_DATES_SHOWN).map((a) => shortDate(a.date));
+  const suffix = anomalies.length > ANOMALY_DATES_SHOWN ? "…" : "";
+  return `⚠️ Резкие скачки подписчиков: ${String(anomalies.length)} за 28д (${dates.join(", ")}${suffix}) — возможна накрутка или рекламный всплеск`;
+}
+
 /**
  * Собирает текст секции «🌍 Рынок». Если у владельца есть свой ERR (снимок 12b),
  * рядом с рыночным показывается сравнение — иначе только внешние цифры.
  * `dynamics` (12e-2) — рост/отток подписчиков; нет данных → строки просто нет.
+ * `anomalies` (12f) — резкие скачки ряда; пусто → предупреждения нет.
  */
 export function buildMarketSection(
   stat: ChannelMarketStat,
   own: OwnMetrics,
   dynamics: SubscriberDynamics | null = null,
+  anomalies: readonly SubscriberAnomaly[] = [],
 ): string {
   const lines = ["🌍 Рынок (Telemetr)"];
   lines.push(
@@ -57,6 +78,10 @@ export function buildMarketSection(
   const growth = dynamicsLine(dynamics);
   if (growth !== null) {
     lines.push(growth);
+  }
+  const warning = anomalyLine(anomalies);
+  if (warning !== null) {
+    lines.push(warning);
   }
   const err = `📊 ERR по Telemetr: ${pctFromPercent(stat.errPercent)}`;
   lines.push(

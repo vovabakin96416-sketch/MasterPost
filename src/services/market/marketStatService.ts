@@ -16,6 +16,7 @@ import {
   parseMarketCache,
 } from "../../core/market/marketCache.js";
 import { buildMarketSection } from "../../core/market/marketSection.js";
+import { detectSubscriberAnomalies } from "../../core/market/subscriberAnomaly.js";
 import { computeSubscriberDynamics } from "../../core/market/subscriberDynamics.js";
 
 /**
@@ -106,8 +107,9 @@ export async function getMarketData(
 
 /**
  * Текст секции «🌍 Рынок» (экран «📈 Рост» + еженедельный отчёт, 12e-2):
- * рыночный срез + динамика подписчиков + сравнение со своим ERR из последнего
- * снимка охвата (12b). Нет данных → `null` (секции нет).
+ * рыночный срез + динамика подписчиков + предупреждение о резких скачках (12f)
+ * + сравнение со своим ERR из последнего снимка охвата (12b).
+ * Нет данных → `null` (секции нет).
  */
 export async function buildMarketSectionText(
   prisma: PrismaClient,
@@ -128,9 +130,12 @@ export async function buildMarketSectionText(
     data.subscribers === null
       ? null
       : computeSubscriberDynamics(data.subscribers, now);
+  const anomalies =
+    data.subscribers === null ? [] : detectSubscriberAnomalies(data.subscribers);
   return buildMarketSection(
     data.stat,
     { avgErr7d: snapshot?.avgErr7d ?? null },
     dynamics,
+    anomalies,
   );
 }
