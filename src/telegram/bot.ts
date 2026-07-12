@@ -16,6 +16,7 @@ export interface BotDeps extends CommentDeps {
   pexelsApiKey: string | undefined;
   anthropicApiKey: string | undefined; // Шаг 10b: AI-генерация постов (кнопка «🤖 AI-пост»)
   timeoutMs?: number | undefined; // Шаг 11b: таймаут вызова Claude (мс); undefined → дефолт
+  telemetrApiKey: string | undefined; // Шаг 12e: рыночные данные (секция «🌍 Рынок»)
   mtproto: MtprotoConfig;
 }
 

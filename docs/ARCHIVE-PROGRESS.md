@@ -1376,3 +1376,46 @@
     ВКЛ тумблере — секция роста в отчёте тоже пересказана.
   ⏭ Дальше — 12e (Telemetr за адаптером `MarketDataProvider`, мягкая деградация; перевыпустить
     засвеченный ключ Telemetr перед стартом). Автоперестановка расписания — отдельный будущий шаг.
+
+- Шаг 12e-1: РЫНОЧНЫЕ ДАННЫЕ (Telemetr) за адаптером `MarketDataProvider` — первый «взгляд СНАРУЖИ»
+  (12a–12d смотрят внутрь канала через MTProto бесплатно). Пятый подшаг эпика 12, скоуп по шву 12e-1:
+  env-ключ + адаптер + провайдер + ОДНА рыночная метрика в ОДНОМ месте (секция «🌍 Рынок» на экране
+  «📈 Рост»). Остальные метрики (похожие каналы, динамика подписчиков, бенчмарк ниши) и второе место
+  вывода (еженедельный отчёт) — 12e-2. План: `.claude/plans/12e-market-telemetr.md`. Миграций НЕТ.
+  - РЕШЕНИЯ ПЛАНА: метрика v1 — внешний взгляд Telemetr на СВОЙ канал (`GET /channels/stat`:
+    подписчики, охват поста, ERR, упоминания; один вызов API); кэш — `Setting` канала (ключ
+    `market_stat_cache`, JSON `{fetchedAt, stat}`, TTL 12ч) — лимит тарифа (10k/мес) не жжётся на
+    каждое открытие экрана; отдельной таблицы НЕ надо. API проверен живым вызовом (через MCP
+    владельца): база `https://api.telemetr.me`, `Authorization: Bearer`, ответ
+    `{status:"ok", response:{participants_count, avg_post_reach, err_percent, daily_reach,
+    mentions_count, …}}`. ⚠️ Владелец решил НЕ перевыпускать засвеченный ключ («пока устраивает»).
+  - ENV: `TELEMETR_API_KEY` (опционален в zod, как `PEXELS_API_KEY`) — без него секции просто нет.
+  - ЯДРО `src/core/market/` (ЧИСТОЕ, без HTTP/БД, +6 тестов):
+    · `marketData.ts` — тип `ChannelMarketStat` + интерфейс `MarketDataProvider` (риск №4: ядро
+      зависит от интерфейса, не от Telemetr; позже заменим на TGStat/свой MTProto-сбор).
+    · `marketCache.ts` — `MARKET_CACHE_KEY`/`MARKET_CACHE_TTL_MS=12ч`, `parseMarketCache` (zod,
+      кривое → null), `isCacheFresh`.
+    · `marketSection.ts` — `buildMarketSection(stat, own)`: плейн-текст секции «🌍 Рынок» БЕЗ
+      Markdown-эмфазы (правило 12c); рядом с ERR Telemetr — свой ERR за 7д из снимка 12b (сравнение).
+  - АДАПТЕР (`services/market/telemetrProvider.ts`, +5 тестов): `createTelemetrProvider({apiKey,
+    logger, fetchFn?, timeoutMs?, baseUrl?})` → `MarketDataProvider | null` (нет ключа → null до
+    первого запроса). Единственное место в коде, знающее про Telemetr. zod-safeParse ответа;
+    не-2xx (в т.ч. 429 лимит) / `status!="ok"` / кривой JSON / сеть / таймаут → null + warn
+    (мягкая деградация, как Pexels 6a). `fetchFn` инъектируется в тестах — сеть не трогаем.
+  - СЕРВИС (`services/market/marketStatService.ts`): `getMarketStat` — свежий кэш → 0 запросов;
+    протух → запрос + обновление кэша; запрос упал → протухший кэш (старые данные лучше, чем ничего),
+    совсем пусто → null. Ссылка канала: `@username`, иначе `chatId` если @-имя; приватный канал
+    (числовой id) рынку не виден → секции нет. `buildMarketSectionText` — срез + свой ERR из
+    `getLatestStatSnapshot` → текст секции | null.
+  - ВЖИВЛЕНИЕ: `BotDeps`/`AdminDeps` += `telemetrApiKey` (прокинут из `index.ts`); `renderGrowth`
+    добавляет секцию ПОСЛЕ отчёта/AI-пересказа — рыночные данные в Haiku НЕ скармливаем (0 новых
+    токенов, весь 12e без AI-вызовов).
+  - Проверки зелёные: typecheck 0, lint 0, vitest **331/331** (+11, `tests/market.test.ts`), build ок.
+  - ⚠️ Прод: положить `TELEMETR_API_KEY` в env Railway → секция «🌍 Рынок» появится на экране
+    «📈 Рост» (первое открытие — запрос к API, дальше кэш 12ч). Без ключа экран как раньше.
+    Канал должен быть публичным (@username) и известным Telemetr.
+  - Ручная проверка (за пользователем): добавить `TELEMETR_API_KEY` локально/на Railway → «📈 Рост» →
+    внизу секция «🌍 Рынок (Telemetr)» с подписчиками/охватом/ERR/упоминаниями; убрать ключ →
+    секция исчезла, экран живёт как раньше.
+  ⏭ Дальше — 12e-2 (похожие каналы / динамика подписчиков / бенчмарк ниши + секция в еженедельном
+    отчёте) либо следующий шаг роадмапа (`ПЛАН.md`).

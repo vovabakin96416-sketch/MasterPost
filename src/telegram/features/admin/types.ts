@@ -22,6 +22,9 @@ export interface AdminDeps {
   anthropicApiKey: string | undefined;
   // Шаг 11b: таймаут вызова Claude (мс); undefined → DEFAULT_AI_TIMEOUT_MS.
   timeoutMs?: number | undefined;
+  // Шаг 12e: ключ Telemetr для секции «🌍 Рынок» на экране «📈 Рост».
+  // undefined → секции просто нет (мягкая деградация, как pexelsApiKey).
+  telemetrApiKey: string | undefined;
   // Шаг 7b: только для строки статуса в «📊 Аналитика». Это ЧИСТЫЙ конфиг (без GramJS) —
   // меню не тянет тяжёлый mtprotoClient в импорт-граф запущенного бота.
   mtproto: MtprotoConfig;

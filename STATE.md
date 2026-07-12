@@ -3,6 +3,27 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 12e-1 ГОТОВ** (typecheck 0, lint 0, vitest **331/331** [+11], build ок, миграций НЕТ):
+РЫНОЧНЫЕ ДАННЫЕ (Telemetr) за адаптером `MarketDataProvider` — взгляд СНАРУЖИ (12a–12d смотрят
+внутрь через MTProto). Скоуп по шву: ОДНА метрика (внешний взгляд `/channels/stat` на свой канал)
+в ОДНОМ месте (секция «🌍 Рынок» на экране «📈 Рост»). 0 AI-вызовов. План:
+`.claude/plans/12e-market-telemetr.md`.
+- ENV: `TELEMETR_API_KEY` (опционален, как PEXELS) — без него секции просто нет.
+- ЯДРО (`core/market/`): `marketData.ts` (тип + интерфейс `MarketDataProvider` — риск №4, ядро не
+  знает про Telemetr) · `marketCache.ts` (кэш в `Setting`, ключ `market_stat_cache`, TTL 12ч —
+  бережёт лимит 10k/мес) · `marketSection.ts` (плейн-форматтер «🌍 Рынок», сравнение ERR Telemetr
+  со своим ERR за 7д из снимка 12b; БЕЗ Markdown-эмфазы — правило 12c).
+- АДАПТЕР (`services/market/telemetrProvider.ts`): единственное место, знающее про Telemetr
+  (`api.telemetr.me`, Bearer, zod-safeParse); нет ключа/429/ошибка/кривой JSON → null + warn.
+- СЕРВИС (`services/market/marketStatService.ts`): свежий кэш → 0 запросов; протух → запрос;
+  упал → протухший кэш; приватный канал (без @) → секции нет.
+- ВЖИВЛЕНИЕ: `BotDeps`/`AdminDeps` += `telemetrApiKey`; `renderGrowth` — секция ПОСЛЕ
+  отчёта/AI-пересказа (в Haiku рынок не скармливаем).
+- ⚠️ Прод: положить `TELEMETR_API_KEY` в env Railway (владелец решил НЕ перевыпускать засвеченный
+  ключ — «пока устраивает»). Ключ — только в env, НЕ в git.
+- ⏭ Дальше — **12e-2** (похожие каналы, динамика подписчиков, бенчмарк ниши, секция в еженедельном
+  отчёте) либо следующий шаг роадмапа.
+
 **Шаг 12d ГОТОВ** (typecheck 0, lint 0, vitest **320/320** [+10], build ок, миграций НЕТ):
 AI-НАРРАТИВ отчёта «Рост» — опциональный пересказ готовых фактов 12c голосом канала через Haiku.
 Никакой новой аналитики: LLM только переформулирует (принцип 11c/11e), фолбэк — сухой текст 12c.
@@ -287,7 +308,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 320/320**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 331/331**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

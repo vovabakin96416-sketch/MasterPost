@@ -50,6 +50,7 @@ async function main(): Promise<void> {
     pexelsApiKey: env.PEXELS_API_KEY,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     timeoutMs: env.AI_TIMEOUT_MS,
+    telemetrApiKey: env.TELEMETR_API_KEY,
     mtproto,
   });
 

@@ -38,6 +38,10 @@ export const envSchema = z.object({
   // берётся DEFAULT_AI_TIMEOUT_MS. Гарантирует, что зависший запрос не блокирует
   // хендлер/тик надолго (как TIMEOUT_MS у Pexels).
   AI_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  // Ключ Telemetr для рыночных данных (Шаг 12e). Опционален, как PEXELS_API_KEY:
+  // без него секция «🌍 Рынок» просто не показывается, бот работает как раньше.
+  // Ключ — только в env, НЕ в git.
+  TELEMETR_API_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

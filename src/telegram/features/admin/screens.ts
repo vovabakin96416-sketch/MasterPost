@@ -17,6 +17,8 @@ import { postStatus } from "../../../core/schedule/postStatus.js";
 import { shouldWarnContentEnding } from "../../../core/analytics/contentEnding.js";
 import { isMtprotoConfigured } from "../../../services/analytics/mtprotoConfig.js";
 import { buildGrowthReport } from "../../../services/analytics/contentIntelligenceService.js";
+import { createTelemetrProvider } from "../../../services/market/telemetrProvider.js";
+import { buildMarketSectionText } from "../../../services/market/marketStatService.js";
 import { narrateGrowthReport } from "../../../services/ai/growthNarrativeService.js";
 import { getGrowthNarrativeEnabled } from "../../../services/ai/growthNarrativeSettings.js";
 import {
@@ -1012,6 +1014,20 @@ export async function renderGrowth(deps: AdminDeps): Promise<Screen> {
         facts,
       )
     : facts;
+  // Шаг 12e: секция «🌍 Рынок» — внешний взгляд Telemetr на канал. Добавляется
+  // ПОСЛЕ пересказа (в AI рыночные данные не скармливаем — 0 новых токенов).
+  // Без ключа/данных секции нет; лимит API бережёт кэш в Setting (TTL 12ч).
+  const marketProvider = createTelemetrProvider({
+    apiKey: deps.telemetrApiKey,
+    logger: deps.logger,
+  });
+  const marketSection = await buildMarketSectionText(
+    deps.prisma,
+    deps.logger,
+    channel,
+    marketProvider,
+  );
+  const market = marketSection === null ? "" : `\n\n${marketSection}`;
   const hint = isMtprotoConfigured(deps.mtproto)
     ? "\n\nОбновляется автоматически: снимок охвата — ежедневно, полный отчёт — в ПН 09:30 МСК."
     : "\n\n⚠️ MTProto не настроен — метрики не собираются, выводы будут скудными. Включи его в «📊 Аналитика».";
@@ -1019,7 +1035,7 @@ export async function renderGrowth(deps: AdminDeps): Promise<Screen> {
     ? "\n🧠 AI-пересказ включён — тратит токены (лимит общий с AI-ответами)."
     : "";
   return {
-    text: `${report}${hint}${narrativeHint}`,
+    text: `${report}${market}${hint}${narrativeHint}`,
     keyboard: buildKeyboard([
       [
         {
