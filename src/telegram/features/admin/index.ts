@@ -39,6 +39,7 @@ import {
   toggleAiReplyEnabled,
 } from "../../../services/ai/aiReplySettings.js";
 import { setDailyCap } from "../../../services/ai/aiBudget.js";
+import { toggleGrowthNarrativeEnabled } from "../../../services/ai/growthNarrativeSettings.js";
 import {
   addStopWord,
   getStopWords,
@@ -850,6 +851,24 @@ async function routeCallback(
       await editScreen(ctx, await renderGrowth(deps));
       return;
 
+    // Шаг 12d: тумблер AI-пересказа роста. При включении экран сразу перерисуется
+    // уже с пересказом (платный вызов Haiku — потому тост предупреждает про токены).
+    case "gntgl": {
+      const channel = await resolvePostingChannelSelected(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleGrowthNarrativeEnabled(deps.prisma, channel.id);
+      await ctx.answerCallbackQuery({
+        text: next
+          ? "AI-пересказ включён 🧠 (тратит токены) — пересказываю… ⏳"
+          : "AI-пересказ выключен — сухие выводы",
+      });
+      await editScreen(ctx, await renderGrowth(deps));
+      return;
+    }
+
     case "pw": {
       const week = intArg(args, 0);
       if (week === null) {
@@ -1204,6 +1223,8 @@ async function routeCallback(
         api: ctx.api,
         adminId: deps.adminId,
         mtproto: deps.mtproto,
+        anthropicApiKey: deps.anthropicApiKey,
+        timeoutMs: deps.timeoutMs,
       });
       return;
 

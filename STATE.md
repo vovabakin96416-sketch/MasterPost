@@ -3,6 +3,25 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 12d ГОТОВ** (typecheck 0, lint 0, vitest **320/320** [+10], build ок, миграций НЕТ):
+AI-НАРРАТИВ отчёта «Рост» — опциональный пересказ готовых фактов 12c голосом канала через Haiku.
+Никакой новой аналитики: LLM только переформулирует (принцип 11c/11e), фолбэк — сухой текст 12c.
+Сделан ЦЕЛИКОМ (экран + отчёт, шов 12d-1/12d-2 не понадобился).
+- ЯДРО (`core/ai/buildGrowthNarrativePrompt.ts`): промпт из тона канала + готового текста
+  `buildInsightsReport`; system запрещает выдумывать факты/числа; `parseNarrative` (zod, лимит 1500,
+  кривой → null) вычищает `*`/`_` (текст идёт и в Markdown-отчёт, и на плейн-экран — правило 12c).
+- СЕРВИС (`services/ai/growthNarrativeService.ts`): `generateGrowthNarrative` (калька `generateReply`,
+  `CLASSIFY_MODEL`/Haiku, инъекция клиента, мягкая деградация → null) + оркестратор
+  `narrateGrowthReport` (тумблер → ключ → тон канала → `tryConsumeDailyBudget` ОБЩИЙ, списание ДО
+  вызова → Haiku; любой отказ → текст 12c без изменений, расход 0).
+- ХРАНЕНИЕ: `growth_narrative_enabled` в `Setting` (дефолт ВЫКЛ), `growthNarrativeSettings.ts`.
+- ВЖИВЛЕНИЕ: экран «📈 Рост» (пересказ + кнопка-тумблер `🧠 AI-пересказ`, callback `gntgl`) +
+  секция роста еженедельного отчёта (`WeeklyReportDeps` += `anthropicApiKey?`/`timeoutMs?`,
+  прокинуты в планировщике и тест-кнопке `anrep`).
+- ⚠️ Прод: пересказ виден при `ANTHROPIC_API_KEY` + ВКЛ тумблер + непустой бюджет; каждый показ
+  экрана/отчёта при ВКЛ = 1 вызов Haiku (списывает единицу общего `ai_daily_cap`).
+- ⏭ Дальше — **12e** (Telemetr за адаптером `MarketDataProvider`; перевыпустить засвеченный ключ).
+
 **Шаг 12c ГОТОВ** (typecheck 0, lint 0, vitest **310/310** [+10], build ок, миграций НЕТ):
 ВЫВОД Content Intelligence — впервые ПОКАЗЫВАЕТ владельцу выводы (еженедельный отчёт + экран «📈 Рост»).
 Ядро 12a считает, 12b/12b-2 наполняют — 12c форматирует. 0 токенов, всё из готовых таблиц. Сделан ЦЕЛИКОМ.
@@ -268,7 +287,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 310/310**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 320/320**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

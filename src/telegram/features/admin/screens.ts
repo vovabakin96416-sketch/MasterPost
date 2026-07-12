@@ -17,6 +17,8 @@ import { postStatus } from "../../../core/schedule/postStatus.js";
 import { shouldWarnContentEnding } from "../../../core/analytics/contentEnding.js";
 import { isMtprotoConfigured } from "../../../services/analytics/mtprotoConfig.js";
 import { buildGrowthReport } from "../../../services/analytics/contentIntelligenceService.js";
+import { narrateGrowthReport } from "../../../services/ai/growthNarrativeService.js";
+import { getGrowthNarrativeEnabled } from "../../../services/ai/growthNarrativeSettings.js";
 import {
   getTextPoolDetail,
   listButtonPools,
@@ -983,7 +985,9 @@ export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
 /**
  * Экран «📈 Рост» (Шаг 12c) — Content Intelligence: выводы «что зашло / когда лучше
  * публиковать / тренд охвата» + рекомендации советника. Читает из БД (метрики 7c/12b +
- * снимки охвата), 0 токенов. Текст собирает `buildGrowthReport` (плейн, без Markdown —
+ * снимки охвата), 0 токенов; при ВКЛ тумблере «🧠 AI-пересказ» (12d) те же факты
+ * пересказывает Haiku голосом канала (фолбэк — сухой текст, бюджет общий).
+ * Текст собирает `buildGrowthReport` (плейн, без Markdown —
  * `editMessageText` идёт без parse_mode). Данные наполняет джоб снимка (22:00 МСК) и
  * еженедельный отчёт; без MTProto таблицы пустеют → отчёт покажет понятную заглушку.
  */
@@ -992,13 +996,37 @@ export async function renderGrowth(deps: AdminDeps): Promise<Screen> {
   if (channel === null) {
     return noChannelScreen();
   }
-  const report = await buildGrowthReport(deps.prisma, channel.id, channel.timezone);
+  const facts = await buildGrowthReport(deps.prisma, channel.id, channel.timezone);
+  // Шаг 12d: опциональный AI-пересказ тех же фактов голосом канала (тумблер, дефолт
+  // ВЫКЛ). Любой отказ внутри (ключ/бюджет/ошибка) → сухой текст 12c без изменений.
+  const narrativeOn = await getGrowthNarrativeEnabled(deps.prisma, channel.id);
+  const report = narrativeOn
+    ? await narrateGrowthReport(
+        {
+          prisma: deps.prisma,
+          logger: deps.logger,
+          apiKey: deps.anthropicApiKey,
+          timeoutMs: deps.timeoutMs,
+        },
+        channel.id,
+        facts,
+      )
+    : facts;
   const hint = isMtprotoConfigured(deps.mtproto)
     ? "\n\nОбновляется автоматически: снимок охвата — ежедневно, полный отчёт — в ПН 09:30 МСК."
     : "\n\n⚠️ MTProto не настроен — метрики не собираются, выводы будут скудными. Включи его в «📊 Аналитика».";
+  const narrativeHint = narrativeOn
+    ? "\n🧠 AI-пересказ включён — тратит токены (лимит общий с AI-ответами)."
+    : "";
   return {
-    text: `${report}${hint}`,
+    text: `${report}${hint}${narrativeHint}`,
     keyboard: buildKeyboard([
+      [
+        {
+          label: `🧠 AI-пересказ: ${narrativeOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+          data: encodeCb("gntgl"),
+        },
+      ],
       [{ label: "📊 Аналитика", data: encodeCb("an") }],
       navRow(),
     ]),

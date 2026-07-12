@@ -76,6 +76,9 @@ async function main(): Promise<void> {
     api: bot.api,
     adminId: env.ADMIN_ID,
     mtproto,
+    // Шаг 12d: AI-пересказ секции роста в отчёте (тумблер в меню; без ключа — эвристика).
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    timeoutMs: env.AI_TIMEOUT_MS,
   });
 
   const shutdown = (signal: string): void => {

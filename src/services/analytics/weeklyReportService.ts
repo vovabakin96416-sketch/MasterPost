@@ -2,6 +2,7 @@ import { getPostingChannel } from "../../db/repositories/channelRepository.js";
 import { upsertPostMetric } from "../../db/repositories/postMetricRepository.js";
 import { buildWeeklyReport } from "../../core/analytics/weeklyReport.js";
 import { buildGrowthReport } from "./contentIntelligenceService.js";
+import { narrateGrowthReport } from "../ai/growthNarrativeService.js";
 import {
   isMtprotoConfigured,
   type FullMtprotoConfig,
@@ -21,6 +22,11 @@ import { type AnalyticsDeps, sendToAdmin } from "../analyticsService.js";
 /** Зависимости отчёта: всё, что у аналитики, плюс конфиг MTProto (env `TELEGRAM_*`). */
 export interface WeeklyReportDeps extends AnalyticsDeps {
   mtproto: MtprotoConfig;
+  // Шаг 12d: ключ Anthropic для AI-пересказа секции роста. undefined → секция
+  // остаётся эвристическим текстом 12c (как pexelsApiKey у фото — мягко).
+  anthropicApiKey?: string | undefined;
+  // Шаг 11b: таймаут вызова Claude (мс); undefined → DEFAULT_AI_TIMEOUT_MS.
+  timeoutMs?: number | undefined;
 }
 
 /** Окно отчёта — последние 7 дней (как `timedelta(days=7)` в Python). */
@@ -80,7 +86,19 @@ async function collectReport(
     // Шаг 12c: после сырых чисел — секция Content Intelligence (выводы/рекомендации).
     // Метрики только что записаны в БД, так что отчёт читает свежие данные. 0 токенов.
     const growth = await buildGrowthReport(deps.prisma, channelId, timezone);
-    return `${weekly}\n\n───────────────\n\n${growth}`;
+    // Шаг 12d: при ВКЛ тумблере «🧠 AI-пересказ» те же факты пересказывает Haiku
+    // голосом канала; выключен/нет ключа/бюджет/ошибка → сухой текст без изменений.
+    const narrated = await narrateGrowthReport(
+      {
+        prisma: deps.prisma,
+        logger: deps.logger,
+        apiKey: deps.anthropicApiKey,
+        timeoutMs: deps.timeoutMs,
+      },
+      channelId,
+      growth,
+    );
+    return `${weekly}\n\n───────────────\n\n${narrated}`;
   } finally {
     // Именно destroy(): disconnect() оставляет жить update-loop GramJS, и при
     // мёртвой сессии он бесконечно спамит тайм-аутами в логи.
