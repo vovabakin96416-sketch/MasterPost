@@ -109,35 +109,31 @@ interface Section {
 /**
  * Главное меню — РЯДЫ по 2 кнопки, сгруппированные по смыслу (частое — сверху):
  * контент → публикация → комменты → канал → сводки. Кнопки-заглушки «скоро»
- * на главную не выносим (строка про AI-ответы живёт в «⚙️ Настройки»).
+ * на главную не выносим (строка про AI-ответы живёт в «💬 Комментарии»).
  */
 export const MAIN_SECTIONS: readonly (readonly Section[])[] = [
-  // Редизайн (вар. B, подшаг 1): единый вход «📅 План» открывается на текущей
-  // неделе (`cal` = renderCalendar), а «🗂 Весь план» внутри — список недель
-  // (`plan` = renderPlan). Слиты бывшие «Календарь» + «Контент-план» — один объект.
+  // Редизайн (вар. B): «📅 План» = слитые «Календарь»+«Контент-план» (подшаг 1);
+  // «💬 Комментарии» (`set`) = бывш. «Настройки» + «Триггеры» + «Статус→Сводка»
+  // (подшаг 2). Финальная раскладка (быстрые действия + бейдж) — подшаг 3.
   [
     { label: "📅 План", data: encodeCb("cal") },
     { label: "➕ Новый пост", data: encodeCb("np") },
   ],
-  // Шаг 12c — Content Intelligence: выводы «что зашло / когда / тренд» + рекомендации.
-  [{ label: "📈 Рост", data: encodeCb("grow") }],
-  // Шаг 10b — флагманская фича: широкая кнопка на всю строку, чтобы выделялась.
-  [{ label: "🤖 AI-пост", data: encodeCb("aigen") }],
+  [
+    { label: "🤖 AI-пост", data: encodeCb("aigen") },
+    { label: "📈 Рост", data: encodeCb("grow") },
+  ],
   [
     { label: "📅 Автопостинг", data: encodeCb("auto") },
     { label: "📋 Одобрение", data: encodeCb("appr") },
   ],
   [
-    { label: "💬 Триггеры", data: encodeCb("trg", 0) },
     { label: "🔘 Кнопки постов", data: encodeCb("bpl") },
+    { label: "📈 Аналитика", data: encodeCb("an") },
   ],
   [
     { label: "📡 Каналы", data: encodeCb("ch") },
-    { label: "⚙️ Настройки", data: encodeCb("set") },
-  ],
-  [
-    { label: "📊 Статус", data: encodeCb("stat") },
-    { label: "📈 Аналитика", data: encodeCb("an") },
+    { label: "💬 Комментарии", data: encodeCb("set") },
   ],
 ];
 
@@ -352,7 +348,7 @@ export async function renderTriggers(
   if (pager.length > 0) {
     rows.push(pager);
   }
-  rows.push(navRow());
+  rows.push(navRow(encodeCb("set")));
 
   const header =
     summaries.length === 0
@@ -458,7 +454,12 @@ export async function renderAnswer(
   };
 }
 
-/** Экран — настройки (тумблеры). */
+/**
+ * Экран «💬 Комментарии» (редизайн вар. B, подшаг 2; бывш. «⚙️ Настройки») —
+ * всё поведение бота под постами в одном месте: мастер-тумблер ответов, готовые
+ * «💬 Триггеры», «🤖 AI-ответы», «🛡 Модерация», «⏱ Кулдаун» и «📋 Сводка» (бывш. «Статус»).
+ * Отвечает на «почему в настройках комментарии» — теперь раздел назван по сути.
+ */
 export async function renderSettings(deps: AdminDeps): Promise<Screen> {
   const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
@@ -471,7 +472,9 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
     getModerationEnabled(deps.prisma, channel.id),
   ]);
   return {
-    text: "⚙️ Настройки",
+    text:
+      "💬 Комментарии\n\n" +
+      "Как бот ведёт себя под постами: отвечает, чистит спам, держит паузы.",
     keyboard: buildKeyboard([
       [
         {
@@ -479,6 +482,7 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
           data: encodeCb("tgl", "comments"),
         },
       ],
+      [{ label: "💬 Триггеры (готовые ответы)", data: encodeCb("trg", 0) }],
       [
         {
           label: `🤖 AI-ответы: ${aiReplyOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"} ›`,
@@ -492,6 +496,7 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
         },
       ],
       [{ label: `⏱ Кулдаун: ${cooldownLabel(cooldownHours)}`, data: encodeCb("cd") }],
+      [{ label: "📋 Сводка", data: encodeCb("stat") }],
       navRow(),
     ]),
   };
@@ -686,7 +691,11 @@ export function renderAddStopWordPrompt(): Screen {
   };
 }
 
-/** Экран — статус канала (сводка). */
+/**
+ * Экран «📋 Сводка» (бывш. «📊 Статус»; редизайн вар. B, подшаг 2) — быстрая сводка
+ * по общению: триггеры, ответы, вкл/выкл комментов, кулдаун, свежесть пулов.
+ * Живёт внутри раздела «💬 Комментарии» (это про общение, не про просмотры).
+ */
 export async function renderStatus(deps: AdminDeps): Promise<Screen> {
   const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
@@ -712,7 +721,7 @@ export async function renderStatus(deps: AdminDeps): Promise<Screen> {
       : `⚠️ Освежить пулы: ${staleWords.join(", ")}`;
 
   const lines = [
-    "📊 Статус",
+    "📋 Сводка",
     "",
     `Канал: ${title} (${username})`,
     `Триггеров: ${String(channel.triggerWords.length)}`,
@@ -721,7 +730,7 @@ export async function renderStatus(deps: AdminDeps): Promise<Screen> {
     `Кулдаун: ${cooldownLabel(cooldownHours)}`,
     freshness,
   ];
-  return { text: lines.join("\n"), keyboard: buildKeyboard([navRow()]) };
+  return { text: lines.join("\n"), keyboard: buildKeyboard([navRow(encodeCb("set"))]) };
 }
 
 /** Экран-приглашение: жду слово-триггер. */

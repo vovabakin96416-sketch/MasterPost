@@ -389,7 +389,7 @@ export async function setChannelActive(
   await prisma.channel.update({ where: { id }, data: { isActive } });
 }
 
-/** Отображаемые данные канала для экрана «Статус». */
+/** Отображаемые данные канала для экрана «Сводка» (бывш. «Статус»). */
 export interface ChannelDisplay {
   title: string;
   username: string | null;
