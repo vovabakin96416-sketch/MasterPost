@@ -82,6 +82,35 @@ export async function listRecentStatSnapshots(
 }
 
 /**
+ * Изменение числа подписчиков за период (Шаг 13d, guard-метрика вердикта 13a): разница
+ * между самым свежим снимком с известными подписчиками и первым таким снимком не раньше
+ * `since`. Меньше двух пригодных снимков (нет подписчиков/истории) → null (проверка
+ * пропускается). Оба снимка могут совпадать → 0.
+ */
+export async function getSubscriberDeltaSince(
+  prisma: PrismaClient,
+  channelId: string,
+  since: Date,
+): Promise<number | null> {
+  const [earliest, latest] = await Promise.all([
+    prisma.channelStatSnapshot.findFirst({
+      where: { channelId, capturedAt: { gte: since }, subscribers: { not: null } },
+      orderBy: { capturedAt: "asc" },
+      select: { subscribers: true },
+    }),
+    prisma.channelStatSnapshot.findFirst({
+      where: { channelId, subscribers: { not: null } },
+      orderBy: { capturedAt: "desc" },
+      select: { subscribers: true },
+    }),
+  ]);
+  if (earliest?.subscribers == null || latest?.subscribers == null) {
+    return null;
+  }
+  return latest.subscribers - earliest.subscribers;
+}
+
+/**
  * Мягко приводит Json-колонку `topHours` к `TopHour[]`: массив объектов с числовыми
  * `hour`/`value`. Старые (до 12b-2) или битые значения → пустой список.
  */

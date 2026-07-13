@@ -1595,3 +1595,45 @@
   ⏭ Дальше — 13d: экран «🧪 Эксперименты» (запуск/остановка, прогресс по вариантам) +
     секция активных экспериментов и вердиктов в еженедельном отчёте; привязка `variantKey`
     к `PostMetric` при сборе метрик (чтобы вердикт 13a получил чистые выборки).
+- Шаг 13d: ЭКРАН «🧪 Эксперименты» + СЕКЦИЯ В ОТЧЁТЕ + ПРИВЯЗКА `variantKey` К `PostMetric`.
+  Первая ВИДИМАЯ фича эпика 13: владелец запускает/останавливает A/B и видит прогресс.
+  Миграций НЕТ (колонки `PostMetric.variantKey/origin` уже есть с 13b). План
+  `.claude/plans/13-experiments.md`.
+  - ФОРМАТТЕР (`core/experiments/experimentReport.ts`, ЧИСТЫЙ, +6 тестов):
+    `buildExperimentReport({dimensionLabel, startedLabel, variantLabels, verdict})` →
+    текст «строка на вариант (N постов + ERR) · строка статуса». Статусы вердикта 13a:
+    continue («копим данные, нужно ещё ~N»), no_difference («разницы нет, Δ X%»), winner
+    («победил вариант «…» (+X% ERR)»), suspicious («…но подписчики падали — кликбейт, не
+    применяем»). ⚠️ БЕЗ Markdown-эмфазы (правило 12c) — один текст и на экран, и в отчёт.
+  - ПРИВЯЗКА ВАРИАНТА (риск: без `variantKey` на `PostMetric` вердикт не сгруппировать):
+    механизм — ПРЕД-ЗАСЕВ снимка при публикации. `postingService.sendPost` теперь
+    возвращает `message_id` (было void); `publishPending` при `pending.variantKey != null`
+    зовёт новый `postMetricRepository.seedVariantMetric` (upsert по `[channelId,messageId]`
+    с `origin=ai`+`variantKey`, метрики нулевые). Сбор MTProto (`upsertPostMetric`) эти два
+    поля НЕ трогает в update → вариант доживает до вердикта. `message_id` Bot API == id в
+    MTProto. Best-effort: сбой пометки не «отменяет» опубликованный пост. Вариант живёт
+    ТОЛЬКО на пути одобрения (13b/13c: прямая публикация без одобрения в эксп. не участвует).
+  - ЧТЕНИЕ (репозитории): `listVariantMetricsSince` (снимки с `variantKey != null` от
+    `since`, совместимы с `EngagementLike`) · `getSubscriberDeltaSince` (guard-метрика:
+    Δ подписчиков между первым снимком от `since` и последним; <2 пригодных → null).
+  - СЕРВИС (`experimentService.buildExperimentProgress(prisma, channelId, timezone)`):
+    активный эксп. → измерение из каталога → метрики по вариантам → `evaluateExperiment`
+    (с `subscriberDelta`) → `buildExperimentReport`. Нет активного / измерение выпало из
+    каталога → null (тела/секции нет). `startedLabel` = дата старта в поясе канала «ДД.ММ».
+  - ЭКРАН (`screens.renderExperiments`, вход — кнопка «🧪 Эксперименты» на экране «📈 Рост»):
+    идёт эксп. → текст прогресса + «⏹ Остановить»; не идёт → 4 кнопки запуска (по измерению
+    каталога, callback `xstart` с индексом). Роутер: `exp`/`xstart`/`xstop`
+    (`startExperiment`/`stopActiveExperiment` репозитория; инвариант «один активный» держит
+    репозиторий с 13b).
+  - ОТЧЁТ (`weeklyReportService.collectReport`): секция эксперимента ПОСЛЕ AI-пересказа
+    роста, ПЕРЕД «🌍 Рынок». Нет активного → блока нет (мягко). 0 токенов, из БД.
+  - Проверки зелёные: typecheck 0, lint 0, vitest **378/378** (+5: форматтер прогресса —
+    шапка/continue/winner/suspicious/без-Markdown), build ок. Тесты `sendPost` обновлены
+    под новый возврат `message_id` (моки API отдают `{message_id}`).
+  - ⚠️ Прод: миграций/новых env нет. Экран доступен сразу; прогресс наполняется по мере
+    сбора метрик (снимок 22:00 МСК / отчёт ПН) — без MTProto выборки пустые. Пред-засев
+    даёт нулевую строку `PostMetric` до первого сбора (собор её обновит реальными числами).
+  ⏭ Дальше — 13e: петля самооптимизации (Optimization Engine) — выученная стратегия
+    (победитель на измерение + срок годности) в `Setting`, кнопка «применить победителя»,
+    тумблер авто-применения (дефолт ВЫКЛ), подмешивание в `buildPostPrompt`, квота
+    исследования ~75/25. Опц. 13f (AI-советник «что тестировать»).

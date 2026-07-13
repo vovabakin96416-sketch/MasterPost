@@ -2,6 +2,7 @@ import { getPostingChannel } from "../../db/repositories/channelRepository.js";
 import { upsertPostMetric } from "../../db/repositories/postMetricRepository.js";
 import { buildWeeklyReport } from "../../core/analytics/weeklyReport.js";
 import { buildGrowthReport } from "./contentIntelligenceService.js";
+import { buildExperimentProgress } from "../experiments/experimentService.js";
 import { narrateGrowthReport } from "../ai/growthNarrativeService.js";
 import { createTelemetrProvider } from "../market/telemetrProvider.js";
 import { buildMarketSectionText } from "../market/marketStatService.js";
@@ -121,7 +122,15 @@ async function collectReport(
       }),
     );
     const marketBlock = market === null ? "" : `\n\n${market}`;
-    return `${weekly}\n\n───────────────\n\n${narrated}${marketBlock}`;
+    // Шаг 13d: секция активного эксперимента (прогресс вариантов + вердикт 13a).
+    // Нет активного эксперимента → блока нет (мягко, как «Рынок»). 0 токенов, из БД.
+    const experiments = await buildExperimentProgress(
+      deps.prisma,
+      channel.id,
+      channel.timezone,
+    );
+    const experimentBlock = experiments === null ? "" : `\n\n${experiments}`;
+    return `${weekly}\n\n───────────────\n\n${narrated}${experimentBlock}${marketBlock}`;
   } finally {
     // Именно destroy(): disconnect() оставляет жить update-loop GramJS, и при
     // мёртвой сессии он бесконечно спамит тайм-аутами в логи.

@@ -49,7 +49,7 @@ describe("sendPost: фото не должно «съедать» пост", () 
     const sendPhoto = vi
       .fn()
       .mockRejectedValueOnce(grammyError("sendPhoto", PARSE))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ message_id: 100 });
     const sendMessage = vi.fn();
     await sendPost(makeDeps({ sendPhoto, sendMessage }), 1, "text", URL_PHOTO);
     expect(sendPhoto).toHaveBeenCalledTimes(2);
@@ -58,7 +58,7 @@ describe("sendPost: фото не должно «съедать» пост", () 
 
   it("ошибка фото не про разметку → сразу текстом (фото 1 раз)", async () => {
     const sendPhoto = vi.fn().mockRejectedValue(new Error("network"));
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 100 });
     await sendPost(makeDeps({ sendPhoto, sendMessage }), 1, "text", URL_PHOTO);
     expect(sendPhoto).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
@@ -71,10 +71,10 @@ describe("sendPost: фото не должно «съедать» пост", () 
       .fn()
       .mockRejectedValueOnce(grammyError("sendPhoto", PARSE))
       .mockRejectedValueOnce(grammyError("sendPhoto", BAD_PHOTO));
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 100 });
     await expect(
       sendPost(makeDeps({ sendPhoto, sendMessage }), 1, "text", URL_PHOTO),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(100);
     expect(sendPhoto).toHaveBeenCalledTimes(2);
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
@@ -113,7 +113,7 @@ describe("requestApprovalForDraft: обобщённая постановка в 
   it("AI-черновик (externalId=null) → снимок с pexelsQuery + превью админу", async () => {
     // Без ключа Pexels фото не подберётся (photoUrl=null), сетевого вызова нет.
     const create = vi.fn().mockResolvedValue({ id: "p1" });
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 100 });
     const prisma = {
       setting: { findUnique: vi.fn().mockResolvedValue(null) }, // media_tier не задан → free
       pendingPost: { create },
@@ -193,7 +193,7 @@ describe("publishDuePostsForChannel: прогресс пишется после 
     const sendMessage = vi
       .fn()
       .mockRejectedValueOnce(new Error("network"))
-      .mockResolvedValue(undefined);
+      .mockResolvedValue({ message_id: 100 });
     const deps: PostingDeps = { ...makeDeps({ sendMessage }), prisma };
     const channel: PostingChannel = {
       id: "ch1",

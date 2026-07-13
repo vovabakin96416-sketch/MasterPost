@@ -4,8 +4,13 @@ import {
   getActiveExperiment,
   takeNextVariantIndex,
 } from "../../db/repositories/experimentRepository.js";
+import { listVariantMetricsSince } from "../../db/repositories/postMetricRepository.js";
+import { getSubscriberDeltaSince } from "../../db/repositories/channelStatSnapshotRepository.js";
 import { assignVariant } from "../../core/experiments/assignVariant.js";
 import { getDimensionSpec } from "../../core/experiments/experiment.js";
+import { evaluateExperiment } from "../../core/experiments/evaluateExperiment.js";
+import { buildExperimentReport } from "../../core/experiments/experimentReport.js";
+import { localDateParts } from "../../core/schedule/localDate.js";
 
 /**
  * Сервис экспериментов (Шаг 13b/13c) — оркестрация поверх ядра 13a и репозитория.
@@ -74,4 +79,51 @@ export async function assignExperimentVariant(
     deps.logger.warn({ err, channelId }, "не смог назначить вариант эксперимента");
     return null;
   }
+}
+
+/**
+ * Прогресс активного эксперимента канала текстом (Шаг 13d) — для экрана «🧪 Эксперименты»
+ * и секции еженедельного отчёта. Читает снимки метрик постов эксперимента (с `since =
+ * startedAt`), группирует по вариантам, считает вердикт 13a (с guard-метрикой по Δ
+ * подписчиков за период) и форматирует чистым текстом (реюз `buildExperimentReport`).
+ *
+ * Нет активного эксперимента / измерение выпало из каталога → null (секции/тела нет).
+ * `now` не нужен: окно эксперимента задаёт `startedAt`, а не «последние N дней».
+ */
+export async function buildExperimentProgress(
+  prisma: PrismaClient,
+  channelId: string,
+  timezone: string,
+): Promise<string | null> {
+  const experiment = await getActiveExperiment(prisma, channelId);
+  if (experiment === null) {
+    return null;
+  }
+  const spec = getDimensionSpec(experiment.dimension);
+  if (spec === null) {
+    return null;
+  }
+  const metrics = await listVariantMetricsSince(prisma, channelId, experiment.startedAt);
+  const samples = spec.variants.map((v) => ({
+    key: v.key,
+    posts: metrics.filter((m) => m.variantKey === v.key),
+  }));
+  const subscriberDelta = await getSubscriberDeltaSince(
+    prisma,
+    channelId,
+    experiment.startedAt,
+  );
+  const verdict = evaluateExperiment(samples, subscriberDelta);
+  const variantLabels: Record<string, string> = {};
+  for (const v of spec.variants) {
+    variantLabels[v.key] = v.label;
+  }
+  const iso = localDateParts(experiment.startedAt, timezone).isoDate; // «YYYY-MM-DD»
+  const startedLabel = `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+  return buildExperimentReport({
+    dimensionLabel: spec.label,
+    startedLabel,
+    variantLabels,
+    verdict,
+  });
 }

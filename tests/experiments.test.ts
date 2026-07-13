@@ -11,6 +11,7 @@ import {
   type VariantSample,
 } from "../src/core/experiments/evaluateExperiment";
 import type { EngagementLike } from "../src/core/analytics/engagement";
+import { buildExperimentReport } from "../src/core/experiments/experimentReport";
 
 /** Пост с заданным ERR при 100 просмотрах (реакции = ERR×100, комментов 0). */
 function post(err: number, views = 100): EngagementLike {
@@ -151,5 +152,81 @@ describe("evaluateExperiment (вердикт)", () => {
       sample("b", MIN_POSTS_PER_VARIANT, 0),
     ]);
     expect(verdict.status).toBe("no_difference");
+  });
+});
+
+describe("buildExperimentReport (форматтер прогресса 13d)", () => {
+  const labels = { a: "Вопрос к аудитории", b: "Призыв к действию" };
+
+  it("шапка: измерение + дата старта + строка на каждый вариант с ERR", () => {
+    const verdict = evaluateExperiment([sample("a", 4, 0.03), sample("b", 3, 0.04)]);
+    const text = buildExperimentReport({
+      dimensionLabel: "Стиль CTA",
+      startedLabel: "12.07",
+      variantLabels: labels,
+      verdict,
+    });
+    expect(text).toContain("Измерение: Стиль CTA");
+    expect(text).toContain("Идёт с 12.07");
+    expect(text).toContain("Вопрос к аудитории: 4 поста, ERR 3.0%");
+    expect(text).toContain("Призыв к действию: 3 поста, ERR 4.0%");
+  });
+
+  it("статус continue: копим данные, число ещё нужных постов", () => {
+    const verdict = evaluateExperiment([sample("a", 1, 0.05), sample("b", 1, 0.05)]);
+    expect(verdict.status).toBe("continue");
+    const text = buildExperimentReport({
+      dimensionLabel: "Длина поста",
+      startedLabel: "01.08",
+      variantLabels: labels,
+      verdict,
+    });
+    expect(text).toContain("копим данные");
+    if (verdict.status === "continue") {
+      expect(text).toContain(String(verdict.postsNeeded));
+    }
+  });
+
+  it("статус winner: называет вариант-победитель подписью из каталога", () => {
+    const verdict = evaluateExperiment([
+      sample("a", MIN_POSTS_PER_VARIANT, 0.1),
+      sample("b", MIN_POSTS_PER_VARIANT, 0.07),
+    ]);
+    expect(verdict.status).toBe("winner");
+    const text = buildExperimentReport({
+      dimensionLabel: "Стиль CTA",
+      startedLabel: "12.07",
+      variantLabels: labels,
+      verdict,
+    });
+    expect(text).toContain("победил вариант «Вопрос к аудитории»");
+    expect(text).toContain("% ERR)");
+  });
+
+  it("статус suspicious: победитель при оттоке подписчиков → не применяем", () => {
+    const verdict = evaluateExperiment(
+      [sample("a", MIN_POSTS_PER_VARIANT, 0.1), sample("b", MIN_POSTS_PER_VARIANT, 0.07)],
+      -5,
+    );
+    expect(verdict.status).toBe("suspicious");
+    const text = buildExperimentReport({
+      dimensionLabel: "Стиль CTA",
+      startedLabel: "12.07",
+      variantLabels: labels,
+      verdict,
+    });
+    expect(text).toContain("возможно кликбейт");
+    expect(text).toContain("не применяем");
+  });
+
+  it("без Markdown-эмфазы: нет * и _ (текст идёт и в плейн-экран, и в отчёт)", () => {
+    const verdict = evaluateExperiment([sample("a", 4, 0.03), sample("b", 3, 0.04)]);
+    const text = buildExperimentReport({
+      dimensionLabel: "Стиль заголовка",
+      startedLabel: "12.07",
+      variantLabels: labels,
+      verdict,
+    });
+    expect(text).not.toMatch(/[*_]/);
   });
 });

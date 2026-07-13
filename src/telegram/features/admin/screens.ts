@@ -21,6 +21,8 @@ import { createTelemetrProvider } from "../../../services/market/telemetrProvide
 import { buildMarketSectionText } from "../../../services/market/marketStatService.js";
 import { narrateGrowthReport } from "../../../services/ai/growthNarrativeService.js";
 import { getGrowthNarrativeEnabled } from "../../../services/ai/growthNarrativeSettings.js";
+import { buildExperimentProgress } from "../../../services/experiments/experimentService.js";
+import { EXPERIMENT_DIMENSIONS } from "../../../core/experiments/experiment.js";
 import {
   getTextPoolDetail,
   listButtonPools,
@@ -1043,10 +1045,55 @@ export async function renderGrowth(deps: AdminDeps): Promise<Screen> {
           data: encodeCb("gntgl"),
         },
       ],
+      [{ label: "🧪 Эксперименты", data: encodeCb("exp") }],
       [{ label: "📊 Аналитика", data: encodeCb("an") }],
       navRow(),
     ]),
   };
+}
+
+/**
+ * Экран «🧪 Эксперименты» (Шаг 13d) — последовательный A/B над AI-постами. Идёт
+ * эксперимент → прогресс вариантов (число постов + ERR) + вердикт 13a и кнопка
+ * «остановить». Не идёт → предложение запустить одно измерение из каталога 13a.
+ * Плейн-текст без Markdown-эмфазы (правило 12c) — тот же текст уходит и в отчёт.
+ */
+export async function renderExperiments(deps: AdminDeps): Promise<Screen> {
+  const channel = await resolvePostingChannelSelected(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const progress = await buildExperimentProgress(
+    deps.prisma,
+    channel.id,
+    channel.timezone,
+  );
+  if (progress !== null) {
+    const text = `${progress}\n\nБот чередует 2 варианта между AI-постами и сравнивает вовлечённость (ERR).`;
+    return {
+      text,
+      keyboard: buildKeyboard([
+        [{ label: "⏹ Остановить эксперимент", data: encodeCb("xstop") }],
+        navRow(encodeCb("grow")),
+      ]),
+    };
+  }
+  // Активного эксперимента нет — предлагаем запустить одно из измерений каталога.
+  const rows: Btn[][] = EXPERIMENT_DIMENSIONS.map((d, i) => [
+    { label: `▶️ ${d.label}`, data: encodeCb("xstart", i) },
+  ]);
+  rows.push(navRow(encodeCb("grow")));
+  const lines = [
+    "🧪 Эксперименты",
+    "",
+    "Сейчас эксперимент не идёт.",
+    "",
+    "Запусти проверку одного измерения — бот будет чередовать 2 варианта между " +
+      "AI-постами и сравнит вовлечённость (ERR). Нужно ~5 постов на вариант (2–4 недели).",
+    "",
+    "Что проверяем:",
+  ];
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }
 
 /** Экран — контент-план: список недель с числом постов (Шаг 6.5). */

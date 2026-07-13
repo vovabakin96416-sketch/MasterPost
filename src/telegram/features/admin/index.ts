@@ -41,6 +41,11 @@ import {
 import { setDailyCap } from "../../../services/ai/aiBudget.js";
 import { toggleGrowthNarrativeEnabled } from "../../../services/ai/growthNarrativeSettings.js";
 import {
+  startExperiment,
+  stopActiveExperiment,
+} from "../../../db/repositories/experimentRepository.js";
+import { EXPERIMENT_DIMENSIONS } from "../../../core/experiments/experiment.js";
+import {
   addStopWord,
   getStopWords,
   removeStopWord,
@@ -107,6 +112,7 @@ import {
   renderPlan,
   renderCalendar,
   renderGrowth,
+  renderExperiments,
   renderPlanWeek,
   renderPlanPost,
   renderEditPostFieldPrompt,
@@ -866,6 +872,45 @@ async function routeCallback(
           : "AI-пересказ выключен — сухие выводы",
       });
       await editScreen(ctx, await renderGrowth(deps));
+      return;
+    }
+
+    // Шаг 13d — экран «🧪 Эксперименты»: прогресс активного A/B либо запуск измерения.
+    case "exp":
+      await editScreen(ctx, await renderExperiments(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "xstart": {
+      const idx = intArg(args, 0);
+      const channel = await resolveSelectedChannel(deps);
+      const dim = idx === null ? undefined : EXPERIMENT_DIMENSIONS[idx];
+      if (channel === null || dim === undefined) {
+        await editScreen(ctx, await renderExperiments(deps));
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await startExperiment(deps.prisma, channel.id, dim.dimension);
+      deps.logger.info(
+        { channelId: channel.id, dimension: dim.dimension },
+        "эксперимент запущен",
+      );
+      await editScreen(ctx, await renderExperiments(deps));
+      await ctx.answerCallbackQuery({ text: `Эксперимент «${dim.label}» запущен 🧪` });
+      return;
+    }
+
+    case "xstop": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const stopped = await stopActiveExperiment(deps.prisma, channel.id);
+      await editScreen(ctx, await renderExperiments(deps));
+      await ctx.answerCallbackQuery({
+        text: stopped > 0 ? "Эксперимент остановлен" : "Активных экспериментов нет",
+      });
       return;
     }
 

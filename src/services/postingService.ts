@@ -38,6 +38,7 @@ import {
   deletePending,
   getPending,
 } from "../db/repositories/pendingPostRepository.js";
+import { seedVariantMetric } from "../db/repositories/postMetricRepository.js";
 import { resolvePhoto, refToCacheString } from "./mediaService.js";
 import type { PhotoRef } from "../core/media/types.js";
 import type { PhotoSources } from "../core/media/resolvePriority.js";
@@ -131,6 +132,9 @@ function markup(keyboard: InlineKeyboard | undefined): { reply_markup?: InlineKe
  * Отправляет пост: с фото (`sendPhoto` + подпись) или текстом (`sendMessage`).
  * Расширение порта `safe_send`: при кривом Markdown — повтор без `parse_mode`; если
  * фото не уходит (битый URL и т.п.) — публикуем текстом, чтобы пост не пропал.
+ *
+ * Возвращает `message_id` опубликованного сообщения (Шаг 13d — привязка варианта
+ * эксперимента к будущему снимку метрик) или null, если отправить не удалось.
  */
 export async function sendPost(
   deps: PostingDeps,
@@ -138,18 +142,18 @@ export async function sendPost(
   text: string,
   photo: PhotoRef | null,
   keyboard?: InlineKeyboard,
-): Promise<void> {
+): Promise<number | null> {
   const { api, logger } = deps;
   if (photo !== null) {
     const input = toInputPhoto(photo);
     const caption = truncateCaption(text);
     try {
-      await api.sendPhoto(chatId, input, {
+      const msg = await api.sendPhoto(chatId, input, {
         caption,
         parse_mode: "Markdown",
         ...markup(keyboard),
       });
-      return;
+      return msg.message_id;
     } catch (err) {
       // Кривой Markdown — пробуем то же фото без разметки. Если и повтор упал (или
       // ошибка вовсе не про разметку — битый URL, нет файла) — НЕ роняем пост:
@@ -157,8 +161,8 @@ export async function sendPost(
       // ошибка вылетит мимо фолбэка и «съест» пост/превью.
       if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
         try {
-          await api.sendPhoto(chatId, input, { caption, ...markup(keyboard) });
-          return;
+          const msg = await api.sendPhoto(chatId, input, { caption, ...markup(keyboard) });
+          return msg.message_id;
         } catch (retryErr) {
           logger.warn({ err: retryErr }, "не смог отправить фото — публикую текстом");
         }
@@ -168,11 +172,15 @@ export async function sendPost(
     }
   }
   try {
-    await api.sendMessage(chatId, text, { parse_mode: "Markdown", ...markup(keyboard) });
+    const msg = await api.sendMessage(chatId, text, {
+      parse_mode: "Markdown",
+      ...markup(keyboard),
+    });
+    return msg.message_id;
   } catch (err) {
     if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
-      await api.sendMessage(chatId, text, { ...markup(keyboard) });
-      return;
+      const msg = await api.sendMessage(chatId, text, { ...markup(keyboard) });
+      return msg.message_id;
     }
     throw err;
   }
@@ -611,7 +619,7 @@ export async function publishPending(
     return { ok: false, reason: "no_target" };
   }
   const keyboard = await buildPendingPostKeyboard(deps, channel.id, pending.externalId);
-  await sendPost(
+  const messageId = await sendPost(
     deps,
     channel.chatId,
     buildPostMessage(pending),
@@ -620,6 +628,19 @@ export async function publishPending(
   );
   await deletePending(deps.prisma, pendingId);
   await registerCtaTrigger(deps, channel.id, pending.cta);
+  // Шаг 13d: пост нёс вариант активного эксперимента → помечаем будущий снимок метрик
+  // его ключом, чтобы вердикт (13a) считал по чистым выборкам. Best-effort: сбой пометки
+  // не должен «отменять» уже опубликованный пост.
+  if (pending.variantKey !== null && messageId !== null) {
+    try {
+      await seedVariantMetric(deps.prisma, channel.id, messageId, pending.variantKey);
+    } catch (err) {
+      deps.logger.warn(
+        { err, channelId: channel.id, messageId },
+        "не смог пометить опубликованный пост вариантом эксперимента",
+      );
+    }
+  }
   deps.logger.info({ pendingId, channelId: channel.id }, "пост опубликован (одобрен)");
   return { ok: true };
 }
