@@ -45,6 +45,7 @@ import type { PhotoSources } from "../core/media/resolvePriority.js";
 // циклический, но безопасный: обе стороны используются только внутри тел функций
 // (не на верхнем уровне модуля), а объявления функций поднимаются (hoisting).
 import { buildAiDraft, type AiDraftFailure } from "./ai/aiPostApprovalService.js";
+import { assignExperimentVariant } from "./experiments/experimentService.js";
 
 /**
  * Сервис публикации постов (Шаг 4 / Доработка 4.1 / Шаг 6a — порт `send_post`).
@@ -391,7 +392,14 @@ async function placeAiFallbackPost(
     return;
   }
   if (approvalOn) {
-    await requestApprovalForDraft(deps, channel.id, channel.chatId, built.draft);
+    // Шаг 13b — назначаем вариант эксперимента только когда пост реально уходит в
+    // очередь (одобрение ВКЛ). Прямая публикация (ветка ниже) варианта пока не
+    // записывает — привязка к `PostMetric` появится в 13c/13d.
+    const variantKey = await assignExperimentVariant(deps, channel.id);
+    await requestApprovalForDraft(deps, channel.id, channel.chatId, {
+      ...built.draft,
+      variantKey,
+    });
     deps.logger.info(
       { channelId: channel.id },
       "AI-пост (автоподхват) отправлен на одобрение",
@@ -528,6 +536,9 @@ export interface ApprovalDraft {
   readonly externalId: number | null;
   readonly pexelsQuery: string | null;
   readonly photoSources: PhotoSources;
+  // Шаг 13b — вариант активного эксперимента (только AI-путь его проставляет).
+  // Плановый пост не участвует в экспериментах → поле не задаётся (→ null в очереди).
+  readonly variantKey?: string | null;
 }
 
 /**
@@ -550,6 +561,7 @@ export async function requestApprovalForDraft(
     externalId: draft.externalId,
     photoUrl: refToCacheString(photo),
     pexelsQuery: draft.pexelsQuery,
+    variantKey: draft.variantKey ?? null,
   });
   await sendApprovalPreview(deps, buildApprovalCaption(draft, target), pending.id, photo);
 }

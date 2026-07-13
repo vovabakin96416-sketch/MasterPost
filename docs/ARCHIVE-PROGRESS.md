@@ -1527,3 +1527,37 @@
   ⏭ Дальше — 13b: миграция (`Experiment` + `variantKey` на `PendingPost`/`PostMetric` +
     `origin` human|ai — якорь голоса), репозиторий, назначение варианта при постановке
     AI-поста в очередь.
+
+- Шаг 13b: ХРАНЕНИЕ И ПРИВЯЗКА Experiment Engine — БД-скелет поверх ядра 13a. Видимой
+  фичи нет: эксперименты пока негде запустить (экран/отчёт — 13d), но AI-пост, попадая в
+  очередь одобрения при активном эксперименте, уже получает вариант (ротация). План
+  `.claude/plans/13-experiments.md`.
+  - МИГРАЦИЯ `20260713092250_step13b_experiments_variant_origin` (применена локально):
+    · enum `PostOrigin` (human|ai) + enum `ExperimentStatus` (active|stopped).
+    · таблица `Experiment` (channel, dimension=ключ каталога 13a, status,
+      `assignedCount` — счётчик ротации, startedAt/stoppedAt); индекс (channelId,status).
+    · `PendingPost` += `variantKey?` · `PostMetric` += `origin`/`variantKey?` ·
+      `Post` += `origin` · `PostMetric` += `origin` (дефолт `human` — посты плана
+      написаны людьми; якорь голоса для 13c `getSamplePosts`).
+  - РЕПОЗИТОРИЙ `experimentRepository.ts`: `getActiveExperiment` (активный или null) ·
+    `startExperiment` (держит инвариант «один активный на канал» — стопит предыдущий,
+    затем создаёт) · `stopActiveExperiment` (идемпотентно) · `takeNextVariantIndex`
+    (атомарный `increment` в БД — резервирует индекс ротации без гонки).
+  - СЕРВИС `services/experiments/experimentService.ts` `assignExperimentVariant(deps,
+    channelId)`: активный эксперимент → спецификация измерения (13a) → атомарный индекс →
+    `assignVariant` → ключ варианта. Нет эксперимента/неизвестное измерение → null (счётчик
+    НЕ двигаем). Любая ошибка глотается → null (назначение не роняет публикацию).
+  - ВЖИВЛЕНИЕ: `ApprovalDraft` += опц. `variantKey` (только AI-путь проставляет;
+    плановый пост в экспериментах не участвует → null), проброшен в `createPending`.
+    Вариант назначается ПОСЛЕ успешной сборки черновика (неудача генерации не двигает
+    ротацию), в ДВУХ точках очереди: кнопка «🤖 AI-пост» (`requestAiPostApproval`) и
+    автоподхват при одобрении ВКЛ (`placeAiFallbackPost`). Прямая публикация (одобрение
+    ВЫКЛ) вариант пока НЕ записывает — привязка к `PostMetric` будет в 13c/13d.
+  - Проверки зелёные: typecheck 0, lint 0, vitest **369/369** (+5,
+    `tests/experimentService.test.ts`), build ок.
+  - ⚠️ Прод: миграцию на Railway применит `prisma migrate deploy` (в `npm start`).
+    Поведение бота не меняется, пока нет способа запустить эксперимент (13d): без
+    активной строки `Experiment` `assignExperimentVariant` всегда отдаёт null.
+  ⏭ Дальше — 13c: `buildPostPrompt` += опц. `variantDirective` (текст-директива варианта
+    из каталога 13a); AI-пост/подхват при активном эксперименте получают директиву;
+    `getSamplePosts` — приоритет `origin=human`.

@@ -3,6 +3,31 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 13b ГОТОВ** (typecheck 0, lint 0, vitest **369/369** [+5], build ок, миграция применена локально):
+ХРАНЕНИЕ И ПРИВЯЗКА Experiment Engine — БД-скелет поверх ядра 13a. Видимой фичи нет (эксперименты
+негде запустить — экран/отчёт в 13d), но AI-пост при активном эксперименте уже получает вариант
+(ротация) при постановке в очередь. План: `.claude/plans/13-experiments.md`.
+- МИГРАЦИЯ `..._step13b_experiments_variant_origin`: enum `PostOrigin`(human|ai) + `ExperimentStatus`
+  (active|stopped); таблица `Experiment` (channel, dimension, status, `assignedCount`-счётчик ротации,
+  startedAt/stoppedAt); `PendingPost`+=`variantKey?`, `PostMetric`+=`origin`/`variantKey?`,
+  `Post`+=`origin` (дефолт `human` — посты плана написаны людьми, якорь голоса для 13c).
+- РЕПОЗИТОРИЙ `experimentRepository.ts`: `getActiveExperiment` · `startExperiment` (инвариант «один
+  активный на канал»: стопит предыдущий) · `stopActiveExperiment` · `takeNextVariantIndex` (атомарный
+  `increment` — резервирует индекс ротации без гонки).
+- СЕРВИС `experimentService.ts` `assignExperimentVariant`: активный эксп. → спец. измерения (13a) →
+  атомарный индекс → `assignVariant` → ключ. Нет эксп./неизвестное измерение → null (счётчик не двигаем);
+  ошибка глотается → null (не роняет публикацию).
+- ВЖИВЛЕНИЕ: `ApprovalDraft`+=опц.`variantKey` (только AI-путь; плановый пост → null), проброшен в
+  `createPending`. Вариант назначается ПОСЛЕ успешной сборки черновика в 2 точках очереди: кнопка
+  «🤖 AI-пост» + автоподхват при одобрении ВКЛ. Прямая публикация (одобрение ВЫКЛ) вариант пока НЕ
+  пишет — привязка к `PostMetric` в 13c/13d.
+- ⚠️ Прод: миграцию на Railway применит `prisma migrate deploy`; поведение бота не меняется, пока нет
+  способа запустить эксперимент (13d) — без строки `Experiment` `assignExperimentVariant` = null.
+- ⏭ Дальше — **13c**: `buildPostPrompt` += опц. `variantDirective` (текст-директива варианта из
+  каталога 13a); AI-пост (10b) и автоподхват (10c) при активном эксперименте получают директиву;
+  `getSamplePosts` — приоритет `origin=human`. Затем 13d (экран «🧪 Эксперименты» + секция в отчёте) →
+  13e (петля самооптимизации: выученная стратегия в `Setting`, квота ~75/25, срок годности победителя).
+
 **Шаг 13a ГОТОВ** (typecheck 0, lint 0, vitest **364/364** [+13], build ок, миграций НЕТ):
 ЯДРО Experiment Engine — старт эпика 13 «Optimization + Experiment Engine» (модули 6+8
 из План.txt). План эпика с разбивкой 13a–13f: `.claude/plans/13-experiments.md`.
@@ -375,7 +400,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 351/351**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 369/369**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

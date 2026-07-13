@@ -9,6 +9,7 @@ import {
   getPostingChannelById,
   type PostingChannel,
 } from "../../db/repositories/channelRepository.js";
+import { assignExperimentVariant } from "../experiments/experimentService.js";
 
 /**
  * Сервис «AI-пост в очередь одобрения» (Шаг 10b) + сборщик AI-черновика (10c).
@@ -104,7 +105,14 @@ export async function requestAiPostApproval(
   if (!built.ok) {
     return { ok: false, reason: built.reason };
   }
-  await requestApprovalForDraft(deps, channel.id, channel.chatId, built.draft);
+  // Шаг 13b — активен эксперимент → назначаем AI-посту вариант (ротация). Вариант
+  // резервируем ПОСЛЕ успешной сборки черновика, чтобы неудача генерации не двигала
+  // счётчик ротации. Нет эксперимента → null (пост вне эксперимента).
+  const variantKey = await assignExperimentVariant(deps, channel.id);
+  await requestApprovalForDraft(deps, channel.id, channel.chatId, {
+    ...built.draft,
+    variantKey,
+  });
   deps.logger.info({ channelId: channel.id }, "AI-пост поставлен в очередь одобрения");
   return { ok: true };
 }

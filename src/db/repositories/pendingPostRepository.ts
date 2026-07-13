@@ -17,6 +17,7 @@ export interface PendingPostRow {
   readonly cta: string;
   readonly photoUrl: string | null; // кэш выбранного фото (URL/file_id) — Шаг 6a
   readonly pexelsQuery: string | null; // запрос подбора фото для «🔄 Другое фото» — Шаг 10b
+  readonly variantKey: string | null; // вариант эксперимента (Шаг 13b); null — вне эксперимента
 }
 
 const SELECT = {
@@ -28,6 +29,7 @@ const SELECT = {
   cta: true,
   photoUrl: true,
   pexelsQuery: true,
+  variantKey: true,
 } as const;
 
 /** Поля снимка поста при постановке в очередь. */
@@ -38,6 +40,7 @@ export interface PendingPostInput {
   readonly externalId: number | null;
   readonly photoUrl: string | null; // пред-загруженное фото для превью (Шаг 6a)
   readonly pexelsQuery: string | null; // запрос подбора фото — Шаг 10b (нужен reroll'у AI-постов)
+  readonly variantKey: string | null; // вариант активного эксперимента — Шаг 13b (null — вне него)
 }
 
 /** Кладёт пост в очередь одобрения, возвращает созданную строку (с её id). */

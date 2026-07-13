@@ -40,6 +40,21 @@ enum Weekday {
   sunday
 }
 
+// Источник поста (Шаг 13b) — якорь голоса против нейрослопа: примеры стиля
+// (`getSamplePosts`) в приоритете берут человеческие посты, чтобы AI не учился
+// у вчерашнего себя. Сид-контент канала — `human` (написан людьми).
+enum PostOrigin {
+  human
+  ai
+}
+
+// Статус эксперимента (Шаг 13b). Одно измерение за раз: активен ровно один
+// эксперимент на канал (инвариант держит репозиторий, не БД).
+enum ExperimentStatus {
+  active
+  stopped
+}
+
 // Канал — корень всех данных. Хранит тематику и настройки, не код.
 model Channel {
   id            String    @id @default(cuid())
@@ -66,6 +81,7 @@ model Channel {
   pendingPosts PendingPost[]
   postMetrics  PostMetric[]
   statSnapshots ChannelStatSnapshot[]
+  experiments  Experiment[]
 }
 
 // Пост контент-плана. Поля повторяют content.json.
@@ -96,6 +112,8 @@ model Post {
   publishAt       DateTime? // когда опубликовать (только oneOff)
   publishedAt     DateTime? // когда опубликован (дедуп между тиками планировщика)
   photoFileId     String?
+  // Шаг 13b — источник поста (якорь голоса). Посты контент-плана написаны людьми → human.
+  origin          PostOrigin      @default(human)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
@@ -159,6 +177,9 @@ model PendingPost {
   cta        String
   photoUrl   String? // кэш выбранного фото (URL Pexels или Telegram file_id) — Шаг 6a
   pexelsQuery String? // запрос подбора фото — Шаг 10b: чтобы «🔄 Другое фото» работало и у AI-постов (externalId=null)
+  // Шаг 13b — вариант активного эксперимента, назначенный AI-посту при постановке
+  // в очередь (ключ из каталога 13a); null — пост вне эксперимента.
+  variantKey String?
   createdAt  DateTime @default(now())
 
   @@index([channelId, createdAt])
@@ -181,6 +202,11 @@ model PostMetric {
   hasMedia    Boolean  @default(false) // есть ли фото/видео/док (msg.media)
   hasButtons  Boolean  @default(false) // есть ли inline-кнопки (msg.replyMarkup)
   charLen     Int      @default(0) // длина текста/подписи поста (символов)
+  // Шаг 13b — источник и вариант эксперимента опубликованного поста. `origin`
+  // питает якорь голоса; `variantKey` группирует посты по вариантам при вердикте
+  // эксперимента (13d). null variantKey — пост вне эксперимента.
+  origin      PostOrigin @default(human)
+  variantKey  String?
   postedAt    DateTime // дата публикации сообщения
   collectedAt DateTime @updatedAt // когда последний раз сняли метрики
 
@@ -206,6 +232,27 @@ model ChannelStatSnapshot {
   topHours    Json? // TopHour[] { hour: 0..23, value }
 
   @@index([channelId, capturedAt])
+}
+
+// Эксперимент над контентом (Шаг 13b) — последовательный A/B в Telegram-канале.
+// Настоящего A/B нет (нельзя показать половине подписчиков вариант А), поэтому
+// варианты ОДНОГО измерения (стиль CTA / фото / длина / заголовок из каталога 13a)
+// чередуются между постами. `assignedCount` — счётчик уже назначенных вариантов:
+// детерминированная ротация (`assignVariant`) держит выборки честными. Инвариант
+// «один активный эксперимент на канал» держит репозиторий (не БД).
+model Experiment {
+  id            String           @id @default(cuid())
+  channelId     String
+  channel       Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  dimension     String // ключ измерения из каталога 13a (cta_style | media | length | headline_style)
+  status        ExperimentStatus @default(active)
+  assignedCount Int              @default(0) // сколько постов уже получили вариант (ротация)
+  startedAt     DateTime         @default(now())
+  stoppedAt     DateTime? // когда остановлен (null — идёт)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([channelId, status])
 }
 
 // Подписчик канала (заготовка под аналитику).
