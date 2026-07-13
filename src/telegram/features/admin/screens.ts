@@ -31,6 +31,8 @@ import {
 } from "../../../services/experiments/optimizationService.js";
 import { buildStrategySummary } from "../../../core/experiments/learnedStrategy.js";
 import { EXPERIMENT_DIMENSIONS } from "../../../core/experiments/experiment.js";
+import { adviseNextExperiment } from "../../../services/experiments/experimentAdvisorService.js";
+import { getExperimentAdvisorEnabled } from "../../../services/experiments/experimentAdvisorSettings.js";
 import {
   getTextPoolDetail,
   listButtonPools,
@@ -1102,6 +1104,18 @@ export async function renderExperiments(deps: AdminDeps): Promise<Screen> {
   const rows: Btn[][] = EXPERIMENT_DIMENSIONS.map((d, i) => [
     { label: `▶️ ${d.label}`, data: encodeCb("xstart", i) },
   ]);
+  // Шаг 13f: AI-советник «что тестировать?» — кнопка совета при ВКЛ тумблере (тратит
+  // токен по требованию), сам тумблер (дефолт ВЫКЛ) виден всегда.
+  const advisorOn = await getExperimentAdvisorEnabled(deps.prisma, channel.id);
+  if (advisorOn) {
+    rows.push([{ label: "🔮 Совет: что тестировать?", data: encodeCb("xadvise") }]);
+  }
+  rows.push([
+    {
+      label: `🔮 AI-советник: ${advisorOn ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+      data: encodeCb("xadvtgl"),
+    },
+  ]);
   rows.push(autoRow);
   rows.push(navRow(encodeCb("grow")));
   const lines = [
@@ -1118,6 +1132,62 @@ export async function renderExperiments(deps: AdminDeps): Promise<Screen> {
     "Что проверяем:",
   ];
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/**
+ * Экран «🔮 Совет: что тестировать?» (Шаг 13f) — по нажатию Haiku смотрит на инсайты
+ * 12c и предлагает ОДНО измерение каталога 13a с обоснованием. Кнопка «✅ Запустить»
+ * переиспользует путь запуска `xstart` (по индексу измерения). Любой отказ внутри
+ * (тумблер/ключ/бюджет/ошибка) → понятная заглушка, без падения. Плейн-текст (12c).
+ */
+export async function renderExperimentAdvice(deps: AdminDeps): Promise<Screen> {
+  const channel = await resolvePostingChannelSelected(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  // Идёт эксперимент — совет неуместен (одно измерение за раз): назад к экрану.
+  const active = await computeExperimentVerdict(deps.prisma, channel.id);
+  if (active !== null) {
+    return renderExperiments(deps);
+  }
+  const facts = await buildGrowthReport(deps.prisma, channel.id, channel.timezone);
+  const advice = await adviseNextExperiment(
+    {
+      prisma: deps.prisma,
+      logger: deps.logger,
+      apiKey: deps.anthropicApiKey,
+      timeoutMs: deps.timeoutMs,
+    },
+    channel.id,
+    facts,
+  );
+  if (advice === null) {
+    return {
+      text:
+        "🔮 Совет: что тестировать?\n\n" +
+        "Не удалось получить совет: возможно, выключен AI-советник, нет ключа, исчерпан " +
+        "дневной лимит или пока мало данных. Можно запустить измерение вручную.",
+      keyboard: buildKeyboard([navRow(encodeCb("exp"))]),
+    };
+  }
+  const idx = EXPERIMENT_DIMENSIONS.findIndex((d) => d.dimension === advice.dimension);
+  const rows: Btn[][] = [];
+  if (idx >= 0) {
+    rows.push([
+      { label: `✅ Запустить «${advice.label}»`, data: encodeCb("xstart", idx) },
+    ]);
+  }
+  rows.push(navRow(encodeCb("exp")));
+  const text = [
+    "🔮 Совет: что тестировать следующим",
+    "",
+    `Измерение: ${advice.label}`,
+    "",
+    advice.rationale,
+    "",
+    "Запусти его кнопкой ниже — бот начнёт чередовать варианты между AI-постами.",
+  ].join("\n");
+  return { text, keyboard: buildKeyboard(rows) };
 }
 
 /** Экран — контент-план: список недель с числом постов (Шаг 6.5). */

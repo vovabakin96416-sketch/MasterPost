@@ -1682,3 +1682,43 @@
   ⏭ Дальше — 13f (опц.): AI-советник экспериментов (Haiku по инсайтам 12c предлагает «что
     тестировать следующим», владелец подтверждает кнопкой; бюджет общий `ai_daily_cap`). Либо
     12g (вет чужих каналов) / следующий шаг роадмапа.
+
+- Шаг 13f: AI-СОВЕТНИК ЭКСПЕРИМЕНТОВ — опциональный «что тестировать следующим». Закрывает
+  эпик 13. Haiku смотрит на инсайты 12c (`buildGrowthReport`) и предлагает ОДНО измерение
+  каталога 13a с обоснованием; владелец жмёт «✅ Запустить» → эксперимент стартует существующим
+  путём. Миграций/новых env НЕТ (переиспользует `ANTHROPIC_API_KEY` + общий `ai_daily_cap`).
+  Решения владельца (сессия 2026-07-13): где — экран «🧪 Эксперименты» (расход по требованию);
+  подтверждение — сразу запускает эксперимент; тумблер отдельный, дефолт ВЫКЛ. План
+  `.claude/plans/13-experiments.md`.
+  - КАТАЛОГ (`core/experiments/experiment.ts`): добавлен `EXPERIMENT_DIMENSION_KEYS` (кортеж
+    ключей `as const`) — единый источник для типа `ExperimentDimension` (теперь выводится из
+    кортежа) и для enum-валидации ответа модели.
+  - ЯДРО (`core/experiments/buildAdvisorPrompt.ts`, ЧИСТОЕ, +8 тестов `experimentAdvisor.test.ts`):
+    `buildAdvisorPrompt` (тон канала + инсайты 12c + каталог 4 измерений; ниша/тон/язык данными,
+    niche-agnostic; опц. `settledLabels` — непросроченные измерения выученной стратегии 13e
+    подаются модели как «предпочти другое», против схлопывания); `ADVISOR_JSON_SCHEMA` (Structured
+    Outputs, `dimension` ограничен enum ключей каталога — модель не предложит несуществующее
+    измерение); `parseAdvisorVerdict` (zod: измерение из каталога + обоснование 1..600, кривой
+    JSON/вне каталога/пусто/перебор → null; чистит Markdown-эмфазу — правило 12c).
+  - НАСТРОЙКА (`services/experiments/experimentAdvisorSettings.ts`): тумблер
+    `experiment_advisor_enabled` в `Setting` (дефолт ВЫКЛ, калька `growthNarrativeSettings` 12d).
+  - СЕРВИС (`services/experiments/experimentAdvisorService.ts`, +3 теста): `generateAdvice`
+    (калька `generateGrowthNarrative`/`classifyToxicity` — `CLASSIFY_MODEL` Haiku + JSON-схема,
+    нет ключа/ошибка/кривой ответ → null, клиент инъектируется в тестах) + оркестратор
+    `adviseNextExperiment` (ворота дёшево→дорого: тумблер → ключ → канал → дневной бюджет ОБЩИЙ
+    `ai_daily_cap` списываем ДО вызова → `getLearnedStrategy` для `settledLabels` → Haiku →
+    маппинг измерения в подпись каталога; любой отказ → null, расход 0).
+  - ЭКРАН (`renderExperiments`, ветка «эксперимента нет»): тумблер «🔮 AI-советник» (`xadvtgl`,
+    виден всегда) + кнопка «🔮 Совет: что тестировать?» (`xadvise`, только при ВКЛ). Новый экран
+    `renderExperimentAdvice`: `buildGrowthReport` → `adviseNextExperiment` → текст «Измерение +
+    обоснование» + кнопка «✅ Запустить «Подпись»» (ПЕРЕИСПОЛЬЗУЕТ `xstart` по индексу измерения —
+    тот же путь `startExperiment`, что и ручной запуск 13d). Идёт эксперимент/отказ → заглушка.
+  - РОУТЕР (`admin/index.ts`): `xadvise` (тост «Думаю…» + `renderExperimentAdvice`), `xadvtgl`
+    (`toggleExperimentAdvisorEnabled` + `renderExperiments`). Кнопка запуска совета = существующий
+    `xstart` (нового «go»-callback не понадобилось).
+  - Проверки зелёные: typecheck 0, lint 0, vitest **407/407** (+11: 8 ядро + 3 сервис), build ок.
+  - ⚠️ Прод: совет виден при `ANTHROPIC_API_KEY` + ВКЛ тумблер «🔮 AI-советник»; каждое нажатие
+    «Совет: что тестировать?» = 1 вызов Haiku (списывает единицу общего `ai_daily_cap`). Отчёт ПН
+    НЕ трогали (решение владельца — только экран). Пер-канально (SaaS).
+  ⏭ Эпик 13 ЗАКРЫТ (13a–13f). Дальше — 12g (вет чужих каналов перед закупкой рекламы) или
+    следующий шаг роадмапа (`ПЛАН.md`).

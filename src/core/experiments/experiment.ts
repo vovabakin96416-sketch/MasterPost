@@ -8,8 +8,19 @@
  * как вариант влияет на генерацию/публикацию — решает слой вживления (13c).
  */
 
+/**
+ * Ключи измерений каталога (фиксированный порядок). Единый источник для типа и для
+ * enum-валидации AI-советника (13f) — модель обязана выбрать один из этих ключей.
+ */
+export const EXPERIMENT_DIMENSION_KEYS = [
+  "cta_style",
+  "media",
+  "length",
+  "headline_style",
+] as const;
+
 /** Измерение эксперимента — ЧТО варьируем между постами. */
-export type ExperimentDimension = "cta_style" | "media" | "length" | "headline_style";
+export type ExperimentDimension = (typeof EXPERIMENT_DIMENSION_KEYS)[number];
 
 /**
  * Вариант измерения: ключ для хранения + подпись для меню/отчёта + `directive` —

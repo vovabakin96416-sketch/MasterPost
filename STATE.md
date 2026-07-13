@@ -3,6 +3,30 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 13f ГОТОВ — ЭПИК 13 ЗАКРЫТ** (typecheck 0, lint 0, vitest **407/407** [+11], build ок,
+миграций НЕТ, новых env НЕТ):
+AI-СОВЕТНИК ЭКСПЕРИМЕНТОВ — опциональный «что тестировать следующим». Haiku по инсайтам 12c
+(`buildGrowthReport`) предлагает ОДНО измерение каталога 13a с обоснованием; владелец жмёт
+«✅ Запустить» → эксперимент стартует существующим путём `xstart`/`startExperiment`. Переиспользует
+`ANTHROPIC_API_KEY` + общий `ai_daily_cap`. Решения владельца (2026-07-13): где — экран
+«🧪 Эксперименты» (расход по требованию); подтверждение — сразу запуск; тумблер отдельный, дефолт ВЫКЛ.
+- КАТАЛОГ `experiment.ts`: `EXPERIMENT_DIMENSION_KEYS` (кортеж `as const`) — единый источник
+  типа `ExperimentDimension` и enum-валидации ответа модели.
+- ЯДРО `core/experiments/buildAdvisorPrompt.ts` (ЧИСТОЕ, +8): `buildAdvisorPrompt` (тон+инсайты+
+  каталог; опц. `settledLabels` = непросроченная стратегия 13e → «предпочти другое»);
+  `ADVISOR_JSON_SCHEMA` (Structured Outputs, `dimension` ⊂ enum каталога); `parseAdvisorVerdict`
+  (zod, вне каталога/пусто/перебор/кривой JSON → null; чистит Markdown — правило 12c).
+- НАСТРОЙКА `experimentAdvisorSettings.ts`: тумблер `experiment_advisor_enabled` (дефолт ВЫКЛ,
+  калька 12d). СЕРВИС `experimentAdvisorService.ts` (+3): `generateAdvice` (Haiku, мягкая
+  деградация, клиент инъектируется) + `adviseNextExperiment` (ворота тумблер→ключ→канал→бюджет
+  ДО вызова→`getLearnedStrategy`→Haiku→подпись каталога; отказ → null, расход 0).
+- ЭКРАН `renderExperiments`: тумблер «🔮 AI-советник» (`xadvtgl`) + кнопка «🔮 Совет: что
+  тестировать?» (`xadvise`, при ВКЛ). Новый `renderExperimentAdvice` (совет + «✅ Запустить»
+  через существующий `xstart`). Отчёт ПН НЕ трогали (решение владельца — только экран).
+- ⚠️ Прод: совет виден при `ANTHROPIC_API_KEY` + ВКЛ тумблер; каждое нажатие «Совет» = 1 вызов
+  Haiku (единица общего `ai_daily_cap`). Пер-канально (SaaS).
+- ⏭ Дальше — эпик 13 ЗАКРЫТ (13a–13f). Кандидаты: 12g (вет чужих каналов) / следующий шаг роадмапа.
+
 **Шаг 13e ГОТОВ** (typecheck 0, lint 0, vitest **396/396** [+18], build ок, миграций НЕТ):
 ПЕТЛЯ САМООПТИМИЗАЦИИ (Optimization Engine) — замыкает эпик 13. Победитель эксперимента
 записывается в «выученную стратегию» канала (JSON в `Setting`, без миграции) и подмешивается
@@ -482,7 +506,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 396/396**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 407/407**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

@@ -49,6 +49,7 @@ import {
   toggleStrategyAutoApply,
   type ApplyResult,
 } from "../../../services/experiments/optimizationService.js";
+import { toggleExperimentAdvisorEnabled } from "../../../services/experiments/experimentAdvisorSettings.js";
 import { EXPERIMENT_DIMENSIONS } from "../../../core/experiments/experiment.js";
 import {
   addStopWord,
@@ -118,6 +119,7 @@ import {
   renderCalendar,
   renderGrowth,
   renderExperiments,
+  renderExperimentAdvice,
   renderPlanWeek,
   renderPlanPost,
   renderEditPostFieldPrompt,
@@ -945,6 +947,29 @@ async function routeCallback(
         text: next
           ? "Авто-применение включено 🔁 (победитель применится сам в ПН-обзоре)"
           : "Авто-применение выключено — победителя применяй кнопкой",
+      });
+      return;
+    }
+
+    // Шаг 13f — AI-советник: по требованию предложить измерение для эксперимента.
+    case "xadvise":
+      await ctx.answerCallbackQuery({ text: "Думаю, что стоит проверить… 🔮" });
+      await editScreen(ctx, await renderExperimentAdvice(deps));
+      return;
+
+    // Шаг 13f — тумблер AI-советника экспериментов (дефолт ВЫКЛ).
+    case "xadvtgl": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleExperimentAdvisorEnabled(deps.prisma, channel.id);
+      await editScreen(ctx, await renderExperiments(deps));
+      await ctx.answerCallbackQuery({
+        text: next
+          ? "AI-советник включён 🔮 (тратит токен по запросу, лимит общий с AI)"
+          : "AI-советник выключен",
       });
       return;
     }
