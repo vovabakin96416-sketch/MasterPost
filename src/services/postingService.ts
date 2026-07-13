@@ -45,7 +45,6 @@ import type { PhotoSources } from "../core/media/resolvePriority.js";
 // циклический, но безопасный: обе стороны используются только внутри тел функций
 // (не на верхнем уровне модуля), а объявления функций поднимаются (hoisting).
 import { buildAiDraft, type AiDraftFailure } from "./ai/aiPostApprovalService.js";
-import { assignExperimentVariant } from "./experiments/experimentService.js";
 
 /**
  * Сервис публикации постов (Шаг 4 / Доработка 4.1 / Шаг 6a — порт `send_post`).
@@ -380,7 +379,11 @@ async function placeAiFallbackPost(
   approvalOn: boolean,
   notifyOnFail: boolean,
 ): Promise<void> {
-  const built = await buildAiDraft(deps, channel);
+  // Шаг 13c — вариант эксперимента назначаем только когда пост реально уходит в
+  // очередь (одобрение ВКЛ): директива уйдёт в промпт, а `variantKey` сохранится в
+  // `PendingPost`. Прямая публикация (одобрение ВЫКЛ) варианта не пишет — привязка
+  // к `PostMetric` появится в 13d. `buildAiDraft` сам назначит вариант по флагу.
+  const built = await buildAiDraft(deps, channel, { participateInExperiment: approvalOn });
   if (!built.ok) {
     deps.logger.warn(
       { channelId: channel.id, reason: built.reason },
@@ -392,14 +395,8 @@ async function placeAiFallbackPost(
     return;
   }
   if (approvalOn) {
-    // Шаг 13b — назначаем вариант эксперимента только когда пост реально уходит в
-    // очередь (одобрение ВКЛ). Прямая публикация (ветка ниже) варианта пока не
-    // записывает — привязка к `PostMetric` появится в 13c/13d.
-    const variantKey = await assignExperimentVariant(deps, channel.id);
-    await requestApprovalForDraft(deps, channel.id, channel.chatId, {
-      ...built.draft,
-      variantKey,
-    });
+    // `built.draft` уже несёт `variantKey` активного эксперимента (если он идёт).
+    await requestApprovalForDraft(deps, channel.id, channel.chatId, built.draft);
     deps.logger.info(
       { channelId: channel.id },
       "AI-пост (автоподхват) отправлен на одобрение",

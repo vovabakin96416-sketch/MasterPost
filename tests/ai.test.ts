@@ -95,6 +95,25 @@ describe("buildPostPrompt", () => {
     expect(user).not.toContain("Тема нового поста:");
     expect(user).toContain("Тему выбери сам");
   });
+
+  it("директива варианта (13c) попадает в user отдельным блоком", () => {
+    const { user } = buildPostPrompt({
+      ...input,
+      variantDirective: "Заголовок сделай интригующим.",
+    });
+    expect(user).toContain("Особое указание для этого поста:");
+    expect(user).toContain("Заголовок сделай интригующим.");
+  });
+
+  it("без директивы (пусто/нет) блока «Особое указание» нет", () => {
+    expect(buildPostPrompt(input).user).not.toContain("Особое указание");
+    expect(
+      buildPostPrompt({ ...input, variantDirective: "   " }).user,
+    ).not.toContain("Особое указание");
+    expect(
+      buildPostPrompt({ ...input, variantDirective: null }).user,
+    ).not.toContain("Особое указание");
+  });
 });
 
 describe("generatePostDraft (фейковый клиент)", () => {

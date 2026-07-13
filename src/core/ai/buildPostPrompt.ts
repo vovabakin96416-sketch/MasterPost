@@ -20,6 +20,12 @@ export interface PostPromptInput {
   channelTitle: string;
   examples: PostPromptExample[];
   topic?: string | null;
+  /**
+   * Директива варианта активного эксперимента (Шаг 13c) — указание по ФОРМЕ поста
+   * (стиль CTA / фото / длина / заголовок) из каталога `EXPERIMENT_DIMENSIONS`.
+   * Пусто/нет → обычная генерация без эксперимента.
+   */
+  variantDirective?: string | null;
 }
 
 /** Готовая пара сообщений для `messages.create`. */
@@ -62,6 +68,14 @@ export function buildPostPrompt(input: PostPromptInput): PostPrompt {
       ? `Тема нового поста: ${topic}`
       : "Тему выбери сам — что-то новое и уместное для этого канала.";
 
+  // Шаг 13c — директива активного эксперимента (форма поста). Влияет ТОЛЬКО на форму,
+  // тему/стиль по-прежнему диктуют образцы канала. Пусто → блока в промпте нет.
+  const directive = input.variantDirective?.trim();
+  const directiveBlock =
+    directive !== undefined && directive !== ""
+      ? ["", `Особое указание для этого поста: ${directive}`]
+      : [];
+
   const user = [
     `Канал: ${input.channelTitle}`,
     "",
@@ -70,6 +84,7 @@ export function buildPostPrompt(input: PostPromptInput): PostPrompt {
     examples,
     "",
     topicLine,
+    ...directiveBlock,
     "",
     "Напиши один новый пост в этом стиле.",
   ].join("\n");

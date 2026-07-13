@@ -41,15 +41,30 @@ export type AiPostApprovalResult =
   | { ok: true }
   | { ok: false; reason: "no_key" | "no_channel" | "no_samples" | "gen_failed" };
 
+/** Опции сборки черновика. */
+export interface BuildAiDraftOptions {
+  /**
+   * Участвует ли пост в активном эксперименте (Шаг 13c). `true` (дефолт) — назначить
+   * вариант: его директива уходит в промпт, ключ — в `draft.variantKey`. `false` —
+   * без эксперимента (прямая публикация без одобрения ещё не пишет `variantKey`).
+   */
+  participateInExperiment?: boolean;
+}
+
 /**
  * Собирает AI-черновик голосом канала (10c). Порядок проверок — от дешёвых к дорогим:
- * ключ → образцы → генерация. Канал уже разрешён вызывающим (у автопостинга он есть).
+ * ключ → образцы → назначение варианта → генерация. Канал уже разрешён вызывающим.
  * Возвращает `ApprovalDraft` (externalId=null — источник AI, не контент-план) с
- * `pexelsQuery` черновика, чтобы работал reroll фото.
+ * `pexelsQuery` черновика (для reroll фото) и `variantKey` активного эксперимента.
+ *
+ * Шаг 13c: вариант резервируем ПОСЛЕ проверки образцов (дешёвые отказы индекс не
+ * тратят), но ДО генерации — директива варианта должна попасть в промпт. Ключ и
+ * директива — из одного зарезервированного индекса (`ExperimentAssignment`).
  */
 export async function buildAiDraft(
   deps: AiPostApprovalDeps,
   channel: PostingChannel,
+  options: BuildAiDraftOptions = {},
 ): Promise<AiDraftResult> {
   const apiKey = deps.anthropicApiKey;
   if (apiKey === undefined || apiKey === "") {
@@ -60,9 +75,19 @@ export async function buildAiDraft(
     return { ok: false, reason: "no_samples" };
   }
 
+  // Вариант эксперимента (если участвуем и он активен): директива → промпт, ключ → черновик.
+  const assignment =
+    options.participateInExperiment === false
+      ? null
+      : await assignExperimentVariant(deps, channel.id);
+
   const draft = await generatePostDraft(
     { logger: deps.logger, apiKey, timeoutMs: deps.timeoutMs },
-    { channelTitle: channel.title, examples },
+    {
+      channelTitle: channel.title,
+      examples,
+      variantDirective: assignment?.directive ?? null,
+    },
   );
   if (draft === null) {
     return { ok: false, reason: "gen_failed" };
@@ -81,6 +106,7 @@ export async function buildAiDraft(
         pexelsQuery: draft.pexelsQuery,
         photoPath: null,
       },
+      variantKey: assignment?.variantKey ?? null,
     },
   };
 }
@@ -101,18 +127,13 @@ export async function requestAiPostApproval(
   if (channel === null) {
     return { ok: false, reason: "no_channel" };
   }
-  const built = await buildAiDraft(deps, channel);
+  // Кнопка «🤖 AI-пост» всегда идёт через очередь → пост участвует в эксперименте:
+  // вариант назначается внутри `buildAiDraft` (директива в промпт, ключ в черновик).
+  const built = await buildAiDraft(deps, channel, { participateInExperiment: true });
   if (!built.ok) {
     return { ok: false, reason: built.reason };
   }
-  // Шаг 13b — активен эксперимент → назначаем AI-посту вариант (ротация). Вариант
-  // резервируем ПОСЛЕ успешной сборки черновика, чтобы неудача генерации не двигала
-  // счётчик ротации. Нет эксперимента → null (пост вне эксперимента).
-  const variantKey = await assignExperimentVariant(deps, channel.id);
-  await requestApprovalForDraft(deps, channel.id, channel.chatId, {
-    ...built.draft,
-    variantKey,
-  });
+  await requestApprovalForDraft(deps, channel.id, channel.chatId, built.draft);
   deps.logger.info({ channelId: channel.id }, "AI-пост поставлен в очередь одобрения");
   return { ok: true };
 }

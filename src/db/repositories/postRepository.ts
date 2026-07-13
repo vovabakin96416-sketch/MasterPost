@@ -186,8 +186,13 @@ export interface SamplePost {
 
 /**
  * Несколько постов канала как образцы стиля для AI-генерации (Шаг 10). Берём из
- * недельного контент-плана (`oneOff: false`), по порядку `externalId`. Тон канала
- * выводится из его же постов — тематики в коде нет (niche-agnostic).
+ * недельного контент-плана (`oneOff: false`). Тон канала выводится из его же постов —
+ * тематики в коде нет (niche-agnostic).
+ *
+ * Шаг 13c (якорь голоса): сначала посты `origin=human`, потом `ai`. Enum `PostOrigin`
+ * объявлен `human`→`ai`, а Postgres сортирует enum по порядку объявления, поэтому
+ * `origin asc` = человеческие первыми. Так AI перенимает стиль людей, а не «учится у
+ * вчерашнего себя» (защита от нейрослопа, план 13).
  */
 export async function getSamplePosts(
   prisma: PrismaClient,
@@ -197,7 +202,7 @@ export async function getSamplePosts(
   return prisma.post.findMany({
     where: { channelId, oneOff: false },
     select: { title: true, text: true, cta: true },
-    orderBy: { externalId: "asc" },
+    orderBy: [{ origin: "asc" }, { externalId: "asc" }],
     take: limit,
   });
 }

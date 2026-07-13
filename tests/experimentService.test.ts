@@ -47,11 +47,11 @@ function fakePrisma(active: ExperimentRow | null): {
   return { prisma, updateCalls: () => updateCalls };
 }
 
-describe("assignExperimentVariant (Шаг 13b)", () => {
+describe("assignExperimentVariant (Шаг 13b/13c)", () => {
   it("нет активного эксперимента → null, счётчик не двигаем", async () => {
     const { prisma, updateCalls } = fakePrisma(null);
-    const key = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
-    expect(key).toBeNull();
+    const result = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
+    expect(result).toBeNull();
     expect(updateCalls()).toBe(0);
   });
 
@@ -64,21 +64,28 @@ describe("assignExperimentVariant (Шаг 13b)", () => {
     ];
     for (const [assignedCount, expected] of dims) {
       const { prisma } = fakePrisma(experiment("cta_style", assignedCount));
-      const key = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
-      expect(key).toBe(expected);
+      const result = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
+      expect(result?.variantKey).toBe(expected);
     }
+  });
+
+  it("вместе с ключом отдаёт непустую директиву варианта для промпта (13c)", async () => {
+    const { prisma } = fakePrisma(experiment("cta_style", 0));
+    const result = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
+    expect(result?.variantKey).toBe("question");
+    expect((result?.directive ?? "").length).toBeGreaterThan(0);
   });
 
   it("другое измерение (media) отдаёт свои варианты", async () => {
     const { prisma } = fakePrisma(experiment("media", 0));
-    const key = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
-    expect(key).toBe("with_photo");
+    const result = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
+    expect(result?.variantKey).toBe("with_photo");
   });
 
   it("неизвестное измерение → null и НЕ двигаем счётчик ротации", async () => {
     const { prisma, updateCalls } = fakePrisma(experiment("unknown_dim", 0));
-    const key = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
-    expect(key).toBeNull();
+    const result = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
+    expect(result).toBeNull();
     expect(updateCalls()).toBe(0);
   });
 
@@ -90,7 +97,7 @@ describe("assignExperimentVariant (Шаг 13b)", () => {
         }),
       },
     } as unknown as PrismaClient;
-    const key = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
-    expect(key).toBeNull();
+    const result = await assignExperimentVariant({ prisma, logger: silentLogger }, "c1");
+    expect(result).toBeNull();
   });
 });

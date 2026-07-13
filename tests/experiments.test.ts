@@ -33,6 +33,14 @@ describe("EXPERIMENT_DIMENSIONS (каталог измерений)", () => {
     }
   });
 
+  it("у каждого варианта есть непустая директива для промпта (13c)", () => {
+    for (const spec of EXPERIMENT_DIMENSIONS) {
+      for (const variant of spec.variants) {
+        expect(variant.directive.trim().length).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it("getDimensionSpec: известное → спека, неизвестное → null", () => {
     expect(getDimensionSpec("cta_style")?.label).toBe("Стиль CTA");
     expect(getDimensionSpec("nope")).toBeNull();
@@ -41,8 +49,8 @@ describe("EXPERIMENT_DIMENSIONS (каталог измерений)", () => {
 
 describe("assignVariant (ротация)", () => {
   const variants = [
-    { key: "a", label: "А" },
-    { key: "b", label: "Б" },
+    { key: "a", label: "А", directive: "форма А" },
+    { key: "b", label: "Б", directive: "форма Б" },
   ];
 
   it("детерминированное чередование А,Б,А,Б по счётчику", () => {
