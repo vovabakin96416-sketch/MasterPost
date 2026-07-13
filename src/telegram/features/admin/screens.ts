@@ -112,12 +112,13 @@ interface Section {
  * на главную не выносим (строка про AI-ответы живёт в «⚙️ Настройки»).
  */
 export const MAIN_SECTIONS: readonly (readonly Section[])[] = [
+  // Редизайн (вар. B, подшаг 1): единый вход «📅 План» открывается на текущей
+  // неделе (`cal` = renderCalendar), а «🗂 Весь план» внутри — список недель
+  // (`plan` = renderPlan). Слиты бывшие «Календарь» + «Контент-план» — один объект.
   [
-    { label: "🗂 Контент-план", data: encodeCb("plan") },
+    { label: "📅 План", data: encodeCb("cal") },
     { label: "➕ Новый пост", data: encodeCb("np") },
   ],
-  // Шаг 11a — «где мы в плане»: текущая неделя/день + что прошло/впереди.
-  [{ label: "📅 Календарь", data: encodeCb("cal") }],
   // Шаг 12c — Content Intelligence: выводы «что зашло / когда / тренд» + рекомендации.
   [{ label: "📈 Рост", data: encodeCb("grow") }],
   // Шаг 10b — флагманская фича: широкая кнопка на всю строку, чтобы выделялась.
@@ -940,9 +941,10 @@ export function postFieldByCode(code: number): EditablePostField | undefined {
 }
 
 /**
- * Экран — календарь (Шаг 11a): текущая неделя плана по дням с маркерами
- * ✅ прошёл / ▶️ сегодня / 🔜 впереди. Отвечает на «не вижу, где мы в плане».
- * Строки-посты кликабельны в тот же редактор поста (`pp`), что и «Контент-план».
+ * Экран «📅 План» (Шаг 11a; редизайн вар. B): точка входа раздела плана — текущая
+ * неделя по дням с маркерами ✅ прошёл / ▶️ сегодня / 🔜 впереди. Отвечает на
+ * «не вижу, где мы в плане». Строки-посты кликабельны в редактор поста (`pp`);
+ * «🗂 Весь план» ведёт к списку недель (`renderPlan`) для правки.
  */
 export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
   const channel = await resolvePostingChannelSelected(deps);
@@ -958,7 +960,7 @@ export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
   const posts = await getPostsForWeek(deps.prisma, channel.id, week);
 
   const lines = [
-    "📅 Календарь",
+    "📅 План",
     "",
     `Неделя ${String(week)} из 4 · сегодня ${DAY_RU[today.weekday] ?? today.weekday}`,
     "Легенда: ✅ прошёл · ▶️ сегодня · 🔜 впереди",
@@ -974,7 +976,7 @@ export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
     return {
       text: lines.join("\n"),
       keyboard: buildKeyboard([
-        [{ label: "🗂 Весь план", data: encodeCb("plan") }],
+        [{ label: "🗂 Весь план (4 нед.)", data: encodeCb("plan") }],
         navRow(),
       ]),
     };
@@ -990,7 +992,7 @@ export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
       },
     ];
   });
-  rows.push([{ label: "🗂 Весь план", data: encodeCb("plan") }]);
+  rows.push([{ label: "🗂 Весь план (4 нед.)", data: encodeCb("plan") }]);
   rows.push(navRow());
 
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
@@ -1190,7 +1192,10 @@ export async function renderExperimentAdvice(deps: AdminDeps): Promise<Screen> {
   return { text, keyboard: buildKeyboard(rows) };
 }
 
-/** Экран — контент-план: список недель с числом постов (Шаг 6.5). */
+/**
+ * Экран «🗂 Весь план» — список недель с числом постов (Шаг 6.5; редизайн вар. B).
+ * Под-экран раздела «📅 План»: «◀ Назад» ведёт к текущей неделе (`cal`).
+ */
 export async function renderPlan(deps: AdminDeps): Promise<Screen> {
   const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
@@ -1204,12 +1209,12 @@ export async function renderPlan(deps: AdminDeps): Promise<Screen> {
     },
   ]);
   rows.push([{ label: "➕ Новый пост (разовый)", data: encodeCb("np") }]);
-  rows.push(navRow());
+  rows.push(navRow(encodeCb("cal")));
 
   const header =
     weeks.length === 0
-      ? "🗂 Контент-план\n\nПостов недельного плана пока нет (залей: `npm run seed`).\nМожно добавить разовый пост ниже."
-      : `🗂 Контент-план (${String(weeks.length)} нед.)\n\nВыбери неделю — посмотреть и отредактировать посты, либо добавь разовый пост.`;
+      ? "🗂 Весь план\n\nПостов недельного плана пока нет (залей: `npm run seed`).\nМожно добавить разовый пост ниже."
+      : `🗂 Весь план (${String(weeks.length)} нед.)\n\nВыбери неделю — посмотреть и отредактировать посты, либо добавь разовый пост.`;
   return { text: header, keyboard: buildKeyboard(rows) };
 }
 
