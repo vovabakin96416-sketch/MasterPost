@@ -106,6 +106,7 @@ import {
   renderSetChannelPrompt,
   renderSetCooldownPrompt,
   renderSettings,
+  renderGlobalSettings,
   renderEngagement,
   renderAddAiTriggerPrompt,
   renderSetAiCapPrompt,
@@ -430,6 +431,11 @@ async function routeCallback(
 
     case "set":
       await editScreen(ctx, await renderSettings(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "gset":
+      await editScreen(ctx, await renderGlobalSettings(deps));
       await ctx.answerCallbackQuery();
       return;
 

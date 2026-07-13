@@ -111,30 +111,22 @@ interface Section {
  * контент → публикация → комменты → канал → сводки. Кнопки-заглушки «скоро»
  * на главную не выносим (строка про AI-ответы живёт в «💬 Комментарии»).
  */
+/**
+ * Разделы главного меню — НИЖНИЙ блок (4 раздела + slim «⚙️ Настройки»). Быстрые
+ * действия (Новый пост / AI-пост / Одобрение с бейджем) строит `renderMain` сверху.
+ * Редизайн (вар. B, финал): «📅 План» = Календарь+Контент-план+Автопостинг+Кнопки;
+ * «💬 Комментарии» = Настройки+Триггеры+Сводка; «📈 Рост» = Рост+Отчёт+Эксперименты.
+ */
 export const MAIN_SECTIONS: readonly (readonly Section[])[] = [
-  // Редизайн (вар. B): «📅 План» = слитые «Календарь»+«Контент-план» (подшаг 1);
-  // «💬 Комментарии» (`set`) = бывш. «Настройки» + «Триггеры» + «Статус→Сводка»
-  // (подшаг 2). Финальная раскладка (быстрые действия + бейдж) — подшаг 3.
   [
     { label: "📅 План", data: encodeCb("cal") },
-    { label: "➕ Новый пост", data: encodeCb("np") },
-  ],
-  [
-    { label: "🤖 AI-пост", data: encodeCb("aigen") },
-    { label: "📈 Рост", data: encodeCb("grow") },
-  ],
-  [
-    { label: "📅 Автопостинг", data: encodeCb("auto") },
-    { label: "📋 Одобрение", data: encodeCb("appr") },
-  ],
-  [
-    { label: "🔘 Кнопки постов", data: encodeCb("bpl") },
-    { label: "📈 Аналитика", data: encodeCb("an") },
-  ],
-  [
-    { label: "📡 Каналы", data: encodeCb("ch") },
     { label: "💬 Комментарии", data: encodeCb("set") },
   ],
+  [
+    { label: "📈 Рост", data: encodeCb("grow") },
+    { label: "📡 Каналы", data: encodeCb("ch") },
+  ],
+  [{ label: "⚙️ Настройки", data: encodeCb("gset") }],
 ];
 
 /** Дни недели по-русски для экрана автопостинга. */
@@ -205,13 +197,27 @@ export async function renderMain(deps: AdminDeps): Promise<Screen> {
   const header = current
     ? `📡 Канал: ${channelLabel(current)}`
     : "📡 Канал не выбран — добавь в разделе «Каналы».";
-  const rows = MAIN_SECTIONS.map((row): Btn[] =>
-    row.map((s) => ({ label: s.label, data: s.data })),
-  );
+  // Бейдж очереди одобрения (вар. B): число показываем только когда есть ожидающие,
+  // иначе обычная кнопка — экран одобрения должен быть достижим и при пустой очереди.
+  const pending = current ? await countPending(deps.prisma, current.id) : 0;
+  const approvalLabel =
+    pending > 0 ? `✅ Одобрение (${String(pending)})` : "📋 Одобрение";
+  const rows: Btn[][] = [
+    // Быстрые действия — ежедневный цикл: создать / сгенерировать / одобрить.
+    [
+      { label: "➕ Новый пост", data: encodeCb("np") },
+      { label: "🤖 AI-пост", data: encodeCb("aigen") },
+    ],
+    [{ label: approvalLabel, data: encodeCb("appr") }],
+    // Разделы (нижний блок).
+    ...MAIN_SECTIONS.map((row): Btn[] =>
+      row.map((s) => ({ label: s.label, data: s.data })),
+    ),
+  ];
   return {
     text:
       `🤖 Меню управления\n\n${header}\n\n` +
-      "Сверху — контент и публикация, ниже — ответы в комментах, каналы и сводки:",
+      "Сверху — быстрые действия, ниже — разделы:",
     keyboard: buildKeyboard(rows),
   };
 }
@@ -497,6 +503,37 @@ export async function renderSettings(deps: AdminDeps): Promise<Screen> {
       ],
       [{ label: `⏱ Кулдаун: ${cooldownLabel(cooldownHours)}`, data: encodeCb("cd") }],
       [{ label: "📋 Сводка", data: encodeCb("stat") }],
+      navRow(),
+    ]),
+  };
+}
+
+/**
+ * Экран «⚙️ Настройки» (slim; редизайн вар. B, подшаг 3) — только глобальное/канальное,
+ * НЕ про комментарии (те живут в «💬 Комментарии»). Переключение каналов, цель публикации
+ * и права настраиваются в «📡 Каналы» / «📆 Автопостинг»; здесь — сводка и вход в них.
+ */
+export async function renderGlobalSettings(deps: AdminDeps): Promise<Screen> {
+  const channel = await resolvePostingChannelSelected(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const display = await getChannelDisplay(deps.prisma, channel.id);
+  const title = display?.title ?? "—";
+  const username = display?.username ? `@${display.username}` : "—";
+  const lines = [
+    "⚙️ Настройки",
+    "",
+    `Канал: ${title} (${username})`,
+    `Часовой пояс: ${channel.timezone}`,
+    "",
+    "Здесь только глобальное. Поведение бота в комментах — в разделе «💬 Комментарии».",
+    "Переключение каналов, цель публикации и проверка прав — в «📡 Каналы».",
+  ];
+  return {
+    text: lines.join("\n"),
+    keyboard: buildKeyboard([
+      [{ label: "📡 Управление каналами", data: encodeCb("ch") }],
       navRow(),
     ]),
   };
@@ -808,7 +845,7 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
     rows.push([{ label: `🕐 ${t}   ✖ удалить`, data: encodeCb("atdel", i) }]);
   });
   rows.push([{ label: "➕ Добавить время", data: encodeCb("atadd") }]);
-  rows.push(navRow());
+  rows.push(navRow(encodeCb("cal")));
 
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }
@@ -849,8 +886,9 @@ export async function renderApproval(deps: AdminDeps): Promise<Screen> {
 }
 
 /**
- * Экран — аналитика (Шаг 7a): текущая неделя контент-плана + статус напоминания о
- * его конце. Отчёт по просмотрам/реакциям (через личный аккаунт) — подшаги 7b/7c.
+ * Экран «📨 Отчёт по просмотрам» (бывш. «📊 Аналитика»; редизайн вар. B, подшаг 3) —
+ * управление еженедельным MTProto-отчётом: текущая неделя плана, статус напоминания о
+ * конце контента, статус MTProto + тест-кнопки. Живёт внутри раздела «📈 Рост».
  */
 export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
   const channel = await resolvePostingChannelSelected(deps);
@@ -866,9 +904,9 @@ export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
 
   const mtprotoReady = isMtprotoConfigured(deps.mtproto);
   const lines = [
-    "📊 Аналитика",
+    "📨 Отчёт по просмотрам",
     "",
-    `Контент-план: неделя ${String(week)} из 4`,
+    `План: неделя ${String(week)} из 4`,
     shouldWarnContentEnding(week)
       ? "⚠️ Идёт последняя неделя — пора готовить контент на новый месяц."
       : "Напоминание о конце контента придёт в воскресенье недели 4.",
@@ -892,7 +930,7 @@ export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
       },
     ]);
   }
-  rows.push(navRow());
+  rows.push(navRow(encodeCb("grow")));
 
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }
@@ -986,6 +1024,10 @@ export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
       text: lines.join("\n"),
       keyboard: buildKeyboard([
         [{ label: "🗂 Весь план (4 нед.)", data: encodeCb("plan") }],
+        [
+          { label: "📆 Автопостинг", data: encodeCb("auto") },
+          { label: "🔘 Кнопки постов", data: encodeCb("bpl") },
+        ],
         navRow(),
       ]),
     };
@@ -1002,6 +1044,10 @@ export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
     ];
   });
   rows.push([{ label: "🗂 Весь план (4 нед.)", data: encodeCb("plan") }]);
+  rows.push([
+    { label: "📆 Автопостинг", data: encodeCb("auto") },
+    { label: "🔘 Кнопки постов", data: encodeCb("bpl") },
+  ]);
   rows.push(navRow());
 
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
@@ -1053,7 +1099,7 @@ export async function renderGrowth(deps: AdminDeps): Promise<Screen> {
   const market = marketSection === null ? "" : `\n\n${marketSection}`;
   const hint = isMtprotoConfigured(deps.mtproto)
     ? "\n\nОбновляется автоматически: снимок охвата — ежедневно, полный отчёт — в ПН 09:30 МСК."
-    : "\n\n⚠️ MTProto не настроен — метрики не собираются, выводы будут скудными. Включи его в «📊 Аналитика».";
+    : "\n\n⚠️ MTProto не настроен — метрики не собираются, выводы будут скудными. Включи его в «📨 Отчёт по просмотрам».";
   const narrativeHint = narrativeOn
     ? "\n🧠 AI-пересказ включён — тратит токены (лимит общий с AI-ответами)."
     : "";
@@ -1067,7 +1113,7 @@ export async function renderGrowth(deps: AdminDeps): Promise<Screen> {
         },
       ],
       [{ label: "🧪 Эксперименты", data: encodeCb("exp") }],
-      [{ label: "📊 Аналитика", data: encodeCb("an") }],
+      [{ label: "📨 Отчёт по просмотрам", data: encodeCb("an") }],
       navRow(),
     ]),
   };
@@ -1390,7 +1436,7 @@ export async function renderButtonPools(deps: AdminDeps): Promise<Screen> {
       },
     ];
   });
-  rows.push(navRow());
+  rows.push(navRow(encodeCb("cal")));
 
   const header =
     pools.length === 0
