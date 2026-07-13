@@ -3,6 +3,34 @@
 > Короткий файл. Читается в начале сессии. История по шагам — в `docs/ARCHIVE-PROGRESS.md` (на запрос).
 
 ## 🔜 Сейчас
+**Шаг 13e ГОТОВ** (typecheck 0, lint 0, vitest **396/396** [+18], build ок, миграций НЕТ):
+ПЕТЛЯ САМООПТИМИЗАЦИИ (Optimization Engine) — замыкает эпик 13. Победитель эксперимента
+записывается в «выученную стратегию» канала (JSON в `Setting`, без миграции) и подмешивается
+в промпт генерации следующих AI-постов. План `.claude/plans/13-experiments.md`.
+- ЯДРО `core/experiments/learnedStrategy.ts` (ЧИСТОЕ, +15 тестов): `LearnedStrategyEntry`,
+  `parseLearnedStrategy` (zod), СРОК ГОДНОСТИ `STRATEGY_TTL_WEEKS=6` (`isStrategyExpired`/
+  `strategyDaysLeft`), `recordWinner` (одна запись на измерение), КВОТА `EXPLORATION_ONE_IN=4`
+  (`isExplorationPost` — каждый 4-й пост разведочный, 25%), `buildStrategyDirective` (активные
+  записи кроме измерения под экспериментом → директивы каталога), `buildStrategySummary`
+  (плейн-текст, БЕЗ Markdown-эмфазы — правило 12c).
+- СЕРВИС `services/experiments/optimizationService.ts` (+3 теста): `Setting`-ключи
+  `learned_strategy` / `strategy_apply_counter` / `strategy_auto_apply` (дефолт ВЫКЛ).
+  `resolveAiGeneration` → `{variantDirective, variantKey}`: вариант эксперимента (13c) +
+  стратегия, если пост не разведочный. `applyExperimentWinner`: вердикт `winner` → запись в
+  стратегию + `stopActiveExperiment`; `suspicious` (guard) НЕ применяем; мало данных →
+  `not_ready`. `maybeAutoApplyExperimentWinner` — гейт по тумблеру для джоба.
+- РЕФАКТОР `experimentService`: `computeExperimentVerdict` + `formatExperimentProgress`;
+  `buildExperimentProgress` = их композиция (тот же вердикт нужен экрану/отчёту/применению).
+- ГЕНЕРАЦИЯ `aiPostApprovalService.buildAiDraft`: `assignExperimentVariant` → `resolveAiGeneration`
+  (директива = эксперимент + стратегия). Прямая публикация без одобрения — нейтральна.
+- ЭКРАН `renderExperiments`: блок «📚 Выученная стратегия» + тумблер «🔁 Авто-применение» (`xauto`);
+  при `winner` — кнопка «✅ Применить победителя» (`xapply`). ОТЧЁТ (`runWeeklyReport`, ПН):
+  после отправки — `maybeAutoApplyExperimentWinner`, при `applied` уведомление владельцу.
+- ⚠️ Прод: миграций/env нет. Авто-применение дефолт ВЫКЛ (владелец применяет кнопкой);
+  стратегия наполняется по мере вердиктов. Пер-канально (SaaS).
+- ⏭ Дальше — **13f** (опц.): AI-советник «что тестировать» (Haiku по инсайтам 12c, кнопка
+  подтверждения, бюджет `ai_daily_cap`). Либо 12g (вет чужих каналов) / следующий шаг роадмапа.
+
 **Шаг 13d ГОТОВ** (typecheck 0, lint 0, vitest **378/378** [+5], build ок, миграций НЕТ):
 ЭКРАН «🧪 Эксперименты» + СЕКЦИЯ В ОТЧЁТЕ + ПРИВЯЗКА `variantKey` к `PostMetric` — первая
 ВИДИМАЯ фича эпика 13. Владелец запускает/останавливает A/B и видит прогресс. Колонки
@@ -454,7 +482,7 @@ UX админ-меню (группировка 2×5 + свежие тексты 
 10b (AI-пост → очередь одобрения: миграция `PendingPost.pexelsQuery` + `ApprovalDraft`/
 `requestApprovalForDraft` + `requestAiPostApproval` + кнопка «🤖 AI-пост» + фикс reroll).
 
-Тесты сейчас: **vitest 378/378**, tsc 0, eslint 0.
+Тесты сейчас: **vitest 396/396**, tsc 0, eslint 0.
 
 ## 📌 Ключевые решения
 - Стек: TS strict, grammY, zod, pino, vitest, ESLint (no-any).

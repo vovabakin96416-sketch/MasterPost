@@ -3,12 +3,19 @@ import type { PrismaClient } from "../../db/client.js";
 import {
   getActiveExperiment,
   takeNextVariantIndex,
+  type ExperimentRow,
 } from "../../db/repositories/experimentRepository.js";
 import { listVariantMetricsSince } from "../../db/repositories/postMetricRepository.js";
 import { getSubscriberDeltaSince } from "../../db/repositories/channelStatSnapshotRepository.js";
 import { assignVariant } from "../../core/experiments/assignVariant.js";
-import { getDimensionSpec } from "../../core/experiments/experiment.js";
-import { evaluateExperiment } from "../../core/experiments/evaluateExperiment.js";
+import {
+  getDimensionSpec,
+  type DimensionSpec,
+} from "../../core/experiments/experiment.js";
+import {
+  evaluateExperiment,
+  type ExperimentVerdict,
+} from "../../core/experiments/evaluateExperiment.js";
 import { buildExperimentReport } from "../../core/experiments/experimentReport.js";
 import { localDateParts } from "../../core/schedule/localDate.js";
 
@@ -81,20 +88,25 @@ export async function assignExperimentVariant(
   }
 }
 
+/** Активный эксперимент + его спецификация каталога + посчитанный вердикт (13a). */
+export interface ActiveExperimentVerdict {
+  readonly experiment: ExperimentRow;
+  readonly spec: DimensionSpec;
+  readonly verdict: ExperimentVerdict;
+}
+
 /**
- * Прогресс активного эксперимента канала текстом (Шаг 13d) — для экрана «🧪 Эксперименты»
- * и секции еженедельного отчёта. Читает снимки метрик постов эксперимента (с `since =
- * startedAt`), группирует по вариантам, считает вердикт 13a (с guard-метрикой по Δ
- * подписчиков за период) и форматирует чистым текстом (реюз `buildExperimentReport`).
+ * Считает вердикт активного эксперимента канала (Шаг 13d/13e). Читает снимки метрик
+ * постов эксперимента (с `since = startedAt`), группирует по вариантам, применяет
+ * вердикт 13a с guard-метрикой по Δ подписчиков за период. Нужен И экрану/отчёту (для
+ * текста прогресса), И слою применения победителя (13e) — потому вынесен отдельно.
  *
- * Нет активного эксперимента / измерение выпало из каталога → null (секции/тела нет).
- * `now` не нужен: окно эксперимента задаёт `startedAt`, а не «последние N дней».
+ * Нет активного эксперимента / измерение выпало из каталога → null.
  */
-export async function buildExperimentProgress(
+export async function computeExperimentVerdict(
   prisma: PrismaClient,
   channelId: string,
-  timezone: string,
-): Promise<string | null> {
+): Promise<ActiveExperimentVerdict | null> {
   const experiment = await getActiveExperiment(prisma, channelId);
   if (experiment === null) {
     return null;
@@ -114,16 +126,38 @@ export async function buildExperimentProgress(
     experiment.startedAt,
   );
   const verdict = evaluateExperiment(samples, subscriberDelta);
+  return { experiment, spec, verdict };
+}
+
+/** Плейн-текст прогресса эксперимента из посчитанного вердикта (реюз `buildExperimentReport`). */
+export function formatExperimentProgress(
+  cv: ActiveExperimentVerdict,
+  timezone: string,
+): string {
   const variantLabels: Record<string, string> = {};
-  for (const v of spec.variants) {
+  for (const v of cv.spec.variants) {
     variantLabels[v.key] = v.label;
   }
-  const iso = localDateParts(experiment.startedAt, timezone).isoDate; // «YYYY-MM-DD»
+  const iso = localDateParts(cv.experiment.startedAt, timezone).isoDate; // «YYYY-MM-DD»
   const startedLabel = `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
   return buildExperimentReport({
-    dimensionLabel: spec.label,
+    dimensionLabel: cv.spec.label,
     startedLabel,
     variantLabels,
-    verdict,
+    verdict: cv.verdict,
   });
+}
+
+/**
+ * Прогресс активного эксперимента канала текстом (Шаг 13d) — для секции еженедельного
+ * отчёта. Нет активного эксперимента / измерение выпало из каталога → null (секции нет).
+ * `now` не нужен: окно эксперимента задаёт `startedAt`, а не «последние N дней».
+ */
+export async function buildExperimentProgress(
+  prisma: PrismaClient,
+  channelId: string,
+  timezone: string,
+): Promise<string | null> {
+  const cv = await computeExperimentVerdict(prisma, channelId);
+  return cv === null ? null : formatExperimentProgress(cv, timezone);
 }

@@ -1637,3 +1637,48 @@
     (победитель на измерение + срок годности) в `Setting`, кнопка «применить победителя»,
     тумблер авто-применения (дефолт ВЫКЛ), подмешивание в `buildPostPrompt`, квота
     исследования ~75/25. Опц. 13f (AI-советник «что тестировать»).
+
+- Шаг 13e: ПЕТЛЯ САМООПТИМИЗАЦИИ (Optimization Engine) — замыкает эпик 13: победитель
+  эксперимента (13a–13d) записывается в «выученную стратегию» канала и подмешивается в
+  промпт генерации следующих AI-постов. Миграций НЕТ (стратегия — JSON в `Setting`).
+  План `.claude/plans/13-experiments.md`.
+  - ЯДРО (`core/experiments/learnedStrategy.ts`, ЧИСТОЕ, +15 тестов `learnedStrategy.test.ts`):
+    тип `LearnedStrategyEntry {dimension, variantKey, learnedAt}`; `parseLearnedStrategy`
+    (zod, кривое → []); СРОК ГОДНОСТИ `STRATEGY_TTL_WEEKS=6` — `isStrategyExpired`/
+    `strategyDaysLeft` (кривая дата → просрочена); `recordWinner` (одна запись на измерение,
+    новый вытесняет прежний); КВОТА ИССЛЕДОВАНИЯ `EXPLORATION_ONE_IN=4` — `isExplorationPost`
+    (каждый 4-й пост = разведочный, ровно 25%); `buildStrategyDirective` (непросроченные
+    записи, кроме измерения под активным экспериментом → директивы вариантов каталога 13a
+    через `\n`); `buildStrategySummary` (плейн-текст «Измерение: Вариант (ещё N дней / устарел)»,
+    БЕЗ Markdown-эмфазы — правило 12c).
+  - СЕРВИС (`services/experiments/optimizationService.ts`, +3 теста `optimizationService.test.ts`):
+    хранение в `Setting` — `learned_strategy` (JSON-массив), `strategy_apply_counter` (счётчик
+    для квоты), `strategy_auto_apply` (bool, дефолт ВЫКЛ). `resolveAiGeneration(deps, channelId)`
+    → `{variantDirective, variantKey}`: вариант активного эксперимента (13c, `assignExperimentVariant`
+    резервирует индекс ротации) + выученная стратегия, если пост НЕ разведочный (счётчик через
+    `bumpStrategyCounter`); стратегия исключает измерение под экспериментом; сбой стратегии
+    глотается (остаётся директива эксперимента). `applyExperimentWinner(prisma, channelId, now)`
+    → вердикт `winner` → `recordWinner` в стратегию + `stopActiveExperiment` (эксперимент
+    завершён); `suspicious` (guard: отток подписчиков) НЕ применяем; мало данных → `not_ready`.
+    `maybeAutoApplyExperimentWinner` — гейт по тумблеру для джоба.
+  - РЕФАКТОР `experimentService`: вычисление вердикта вынесено в `computeExperimentVerdict`
+    (активный эксп. + спека каталога + вердикт 13a) и `formatExperimentProgress`;
+    `buildExperimentProgress` = их композиция (DRY: тот же вердикт нужен экрану, отчёту И
+    применению победителя).
+  - ГЕНЕРАЦИЯ (`aiPostApprovalService.buildAiDraft`): `assignExperimentVariant` заменён на
+    `resolveAiGeneration` — директива теперь = эксперимент + стратегия. Прямая публикация без
+    одобрения (`participateInExperiment=false`) остаётся нейтральной (как 13b/13c).
+  - ЭКРАН (`renderExperiments`): добавлены блок «📚 Выученная стратегия» (сводка) и тумблер
+    «🔁 Авто-применение» (callback `xauto`); при вердикте `winner` — кнопка «✅ Применить
+    победителя» (`xapply`). Роутер: `xapply` (`applyExperimentWinner` + тост `applyWinnerToast`),
+    `xauto` (`toggleStrategyAutoApply`).
+  - ОТЧЁТ (`weeklyReportService.runWeeklyReport`): ПОСЛЕ отправки отчёта (метрики свежие из
+    `collectReport`) — `maybeAutoApplyExperimentWinner`; при `applied` шлёт владельцу уведомление.
+    Только в ДЖОБЕ (ПН-обзор), не в тест-кнопке. Сбой глотается, отчёт не роняет.
+  - Проверки зелёные: typecheck 0, lint 0, vitest **396/396** (+18: 15 ядро + 3 сервис), build ок.
+  - ⚠️ Прод: миграций/новых env нет. Стратегия наполняется по мере вердиктов; авто-применение
+    по умолчанию ВЫКЛ (владелец применяет кнопкой). Пер-канально (SaaS: разные аудитории →
+    разные победители).
+  ⏭ Дальше — 13f (опц.): AI-советник экспериментов (Haiku по инсайтам 12c предлагает «что
+    тестировать следующим», владелец подтверждает кнопкой; бюджет общий `ai_daily_cap`). Либо
+    12g (вет чужих каналов) / следующий шаг роадмапа.

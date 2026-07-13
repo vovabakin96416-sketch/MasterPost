@@ -21,7 +21,15 @@ import { createTelemetrProvider } from "../../../services/market/telemetrProvide
 import { buildMarketSectionText } from "../../../services/market/marketStatService.js";
 import { narrateGrowthReport } from "../../../services/ai/growthNarrativeService.js";
 import { getGrowthNarrativeEnabled } from "../../../services/ai/growthNarrativeSettings.js";
-import { buildExperimentProgress } from "../../../services/experiments/experimentService.js";
+import {
+  computeExperimentVerdict,
+  formatExperimentProgress,
+} from "../../../services/experiments/experimentService.js";
+import {
+  getLearnedStrategy,
+  getStrategyAutoApply,
+} from "../../../services/experiments/optimizationService.js";
+import { buildStrategySummary } from "../../../core/experiments/learnedStrategy.js";
 import { EXPERIMENT_DIMENSIONS } from "../../../core/experiments/experiment.js";
 import {
   getTextPoolDetail,
@@ -1063,25 +1071,38 @@ export async function renderExperiments(deps: AdminDeps): Promise<Screen> {
   if (channel === null) {
     return noChannelScreen();
   }
-  const progress = await buildExperimentProgress(
-    deps.prisma,
-    channel.id,
-    channel.timezone,
-  );
-  if (progress !== null) {
-    const text = `${progress}\n\nБот чередует 2 варианта между AI-постами и сравнивает вовлечённость (ERR).`;
-    return {
-      text,
-      keyboard: buildKeyboard([
-        [{ label: "⏹ Остановить эксперимент", data: encodeCb("xstop") }],
-        navRow(encodeCb("grow")),
-      ]),
-    };
+  // Шаг 13e: выученная стратегия канала + тумблер авто-применения победителя.
+  const autoApply = await getStrategyAutoApply(deps.prisma, channel.id);
+  const strategy = await getLearnedStrategy(deps.prisma, channel.id);
+  const summary = buildStrategySummary(strategy, new Date());
+  const autoRow: Btn[] = [
+    {
+      label: `🔁 Авто-применение: ${autoApply ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
+      data: encodeCb("xauto"),
+    },
+  ];
+
+  const cv = await computeExperimentVerdict(deps.prisma, channel.id);
+  if (cv !== null) {
+    const progress = formatExperimentProgress(cv, channel.timezone);
+    const text =
+      `${progress}\n\n📚 Выученная стратегия:\n${summary}\n\n` +
+      "Бот чередует 2 варианта между AI-постами и сравнивает вовлечённость (ERR).";
+    const rows: Btn[][] = [];
+    // Победитель готов → кнопка применения (в стратегию, эксперимент завершится).
+    if (cv.verdict.status === "winner") {
+      rows.push([{ label: "✅ Применить победителя", data: encodeCb("xapply") }]);
+    }
+    rows.push([{ label: "⏹ Остановить эксперимент", data: encodeCb("xstop") }]);
+    rows.push(autoRow);
+    rows.push(navRow(encodeCb("grow")));
+    return { text, keyboard: buildKeyboard(rows) };
   }
   // Активного эксперимента нет — предлагаем запустить одно из измерений каталога.
   const rows: Btn[][] = EXPERIMENT_DIMENSIONS.map((d, i) => [
     { label: `▶️ ${d.label}`, data: encodeCb("xstart", i) },
   ]);
+  rows.push(autoRow);
   rows.push(navRow(encodeCb("grow")));
   const lines = [
     "🧪 Эксперименты",
@@ -1090,6 +1111,9 @@ export async function renderExperiments(deps: AdminDeps): Promise<Screen> {
     "",
     "Запусти проверку одного измерения — бот будет чередовать 2 варианта между " +
       "AI-постами и сравнит вовлечённость (ERR). Нужно ~5 постов на вариант (2–4 недели).",
+    "",
+    "📚 Выученная стратегия:",
+    summary,
     "",
     "Что проверяем:",
   ];

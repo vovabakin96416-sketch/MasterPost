@@ -9,7 +9,7 @@ import {
   getPostingChannelById,
   type PostingChannel,
 } from "../../db/repositories/channelRepository.js";
-import { assignExperimentVariant } from "../experiments/experimentService.js";
+import { resolveAiGeneration } from "../experiments/optimizationService.js";
 
 /**
  * Сервис «AI-пост в очередь одобрения» (Шаг 10b) + сборщик AI-черновика (10c).
@@ -75,18 +75,20 @@ export async function buildAiDraft(
     return { ok: false, reason: "no_samples" };
   }
 
-  // Вариант эксперимента (если участвуем и он активен): директива → промпт, ключ → черновик.
-  const assignment =
+  // Директива генерации (Шаг 13e): вариант активного эксперимента (13c) + выученная
+  // стратегия канала (квота исследования 75/25). Ключ варианта → в черновик. Прямая
+  // публикация без одобрения (`participateInExperiment=false`) остаётся нейтральной.
+  const generation =
     options.participateInExperiment === false
-      ? null
-      : await assignExperimentVariant(deps, channel.id);
+      ? { variantDirective: null, variantKey: null }
+      : await resolveAiGeneration(deps, channel.id);
 
   const draft = await generatePostDraft(
     { logger: deps.logger, apiKey, timeoutMs: deps.timeoutMs },
     {
       channelTitle: channel.title,
       examples,
-      variantDirective: assignment?.directive ?? null,
+      variantDirective: generation.variantDirective,
     },
   );
   if (draft === null) {
@@ -106,7 +108,7 @@ export async function buildAiDraft(
         pexelsQuery: draft.pexelsQuery,
         photoPath: null,
       },
-      variantKey: assignment?.variantKey ?? null,
+      variantKey: generation.variantKey,
     },
   };
 }

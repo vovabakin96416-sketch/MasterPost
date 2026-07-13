@@ -3,6 +3,7 @@ import { upsertPostMetric } from "../../db/repositories/postMetricRepository.js"
 import { buildWeeklyReport } from "../../core/analytics/weeklyReport.js";
 import { buildGrowthReport } from "./contentIntelligenceService.js";
 import { buildExperimentProgress } from "../experiments/experimentService.js";
+import { maybeAutoApplyExperimentWinner } from "../experiments/optimizationService.js";
 import { narrateGrowthReport } from "../ai/growthNarrativeService.js";
 import { createTelemetrProvider } from "../market/telemetrProvider.js";
 import { buildMarketSectionText } from "../market/marketStatService.js";
@@ -159,6 +160,26 @@ export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
     );
     await sendToAdmin(deps, report);
     deps.logger.info("отправлен еженедельный отчёт по просмотрам");
+    // Шаг 13e: ПН-обзор — момент подвести итог эксперимента. При ВКЛ авто-применении
+    // и вердикте `winner` записываем победителя в стратегию канала (метрики только что
+    // обновлены в collectReport). ВЫКЛ (дефолт) → тихо. Сбой не должен ронять отчёт.
+    try {
+      const applied = await maybeAutoApplyExperimentWinner(
+        deps.prisma,
+        deps.logger,
+        channel.id,
+        new Date(),
+      );
+      if (applied.status === "applied") {
+        await sendToAdmin(
+          deps,
+          `🔁 Авто-применение: победитель эксперимента «${applied.dimensionLabel}» — ` +
+            `вариант «${applied.variantLabel}» записан в стратегию канала.`,
+        );
+      }
+    } catch (autoErr) {
+      deps.logger.warn({ err: autoErr }, "сбой авто-применения победителя эксперимента");
+    }
   } catch (err) {
     deps.logger.error({ err }, "ошибка еженедельного отчёта по просмотрам");
     // Мёртвая сессия сама не оживёт — молчать нельзя, иначе отчёты пропадут навсегда.

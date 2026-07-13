@@ -44,6 +44,11 @@ import {
   startExperiment,
   stopActiveExperiment,
 } from "../../../db/repositories/experimentRepository.js";
+import {
+  applyExperimentWinner,
+  toggleStrategyAutoApply,
+  type ApplyResult,
+} from "../../../services/experiments/optimizationService.js";
 import { EXPERIMENT_DIMENSIONS } from "../../../core/experiments/experiment.js";
 import {
   addStopWord,
@@ -914,6 +919,36 @@ async function routeCallback(
       return;
     }
 
+    // Шаг 13e — применить победителя эксперимента в выученную стратегию канала.
+    case "xapply": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const result = await applyExperimentWinner(deps.prisma, channel.id, new Date());
+      await editScreen(ctx, await renderExperiments(deps));
+      await ctx.answerCallbackQuery({ text: applyWinnerToast(result) });
+      return;
+    }
+
+    // Шаг 13e — тумблер авто-применения победителя (дефолт ВЫКЛ).
+    case "xauto": {
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const next = await toggleStrategyAutoApply(deps.prisma, channel.id);
+      await editScreen(ctx, await renderExperiments(deps));
+      await ctx.answerCallbackQuery({
+        text: next
+          ? "Авто-применение включено 🔁 (победитель применится сам в ПН-обзоре)"
+          : "Авто-применение выключено — победителя применяй кнопкой",
+      });
+      return;
+    }
+
     case "pw": {
       const week = intArg(args, 0);
       if (week === null) {
@@ -1696,6 +1731,22 @@ function aiPostResultText(result: Extract<AiPostApprovalResult, { ok: false }>):
       return "У канала нет постов-образцов — заполни контент-план, чтобы AI перенял его стиль.";
     case "gen_failed":
       return "Не удалось сгенерировать пост (модель не ответила или вернула мусор). Попробуй ещё раз чуть позже.";
+  }
+}
+
+/** Тост по результату применения победителя эксперимента (Шаг 13e). */
+function applyWinnerToast(result: ApplyResult): string {
+  switch (result.status) {
+    case "applied":
+      return `Победитель «${result.variantLabel}» применён ✅ (${result.dimensionLabel})`;
+    case "suspicious":
+      return "Подписчики за период падали — победитель под подозрением, не применён";
+    case "not_ready":
+      return "Победитель ещё не определён — копим данные";
+    case "no_experiment":
+      return "Активных экспериментов нет";
+    case "auto_off":
+      return "Авто-применение выключено";
   }
 }
 
