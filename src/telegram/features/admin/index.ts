@@ -113,6 +113,7 @@ import {
   renderModeration,
   renderAddStopWordPrompt,
   renderSetToxicityPolicyPrompt,
+  renderVetPrompt,
   renderStatus,
   renderTrigger,
   renderTriggers,
@@ -143,6 +144,8 @@ import {
   renderNewPostPreview,
 } from "./screens.js";
 import type { AdminDeps, NewPostDraft, PendingInput, Screen } from "./types.js";
+import { createTelemetrProvider } from "../../../services/market/telemetrProvider.js";
+import { vetChannel } from "../../../services/market/channelVettingService.js";
 
 /** Текст постоянной кнопки, открывающей меню одним нажатием (вместо ввода /menu). */
 export const MENU_BUTTON_TEXT = "📋 Меню";
@@ -894,6 +897,13 @@ async function routeCallback(
       await ctx.answerCallbackQuery();
       return;
 
+    // Шаг 12g: вет чужого канала перед закупкой рекламы — жду ссылку/@username.
+    case "vet":
+      pending.set(adminId, { kind: "vetChannel" });
+      await editScreen(ctx, renderVetPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
     case "xstart": {
       const idx = intArg(args, 0);
       const channel = await resolveSelectedChannel(deps);
@@ -1375,6 +1385,40 @@ async function handleInput(
       `✅ Канал «${title}» создан и стал текущим.\nЗаполни его в разделах меню: триггеры, контент-план, цель публикации.`,
     );
     await sendScreen(ctx, await renderChannels(deps));
+    return;
+  }
+
+  // Вет чужого канала (Шаг 12g) не зависит от выбранного своего канала —
+  // обрабатываем до проверки на наличие текущего канала, как создание канала.
+  if (state.kind === "vetChannel") {
+    pending.delete(deps.adminId);
+    const provider = createTelemetrProvider({
+      apiKey: deps.telemetrApiKey,
+      logger: deps.logger,
+    });
+    await ctx.reply("🔍 Проверяю канал…");
+    const outcome = await vetChannel({ logger: deps.logger, provider }, text);
+    switch (outcome.kind) {
+      case "no_key":
+        await ctx.reply(
+          "⚠️ Проверка недоступна: не настроен ключ Telemetr (TELEMETR_API_KEY).",
+        );
+        break;
+      case "bad_ref":
+        await ctx.reply(
+          "⚠️ Не похоже на @username публичного канала. Пришли, например, @favoritehoro или t.me/favoritehoro.",
+        );
+        break;
+      case "not_found":
+        await ctx.reply(
+          `⚠️ Не удалось получить данные по ${outcome.ref}. Канал приватный, не найден в Telemetr или исчерпан лимит запросов.`,
+        );
+        break;
+      case "ok":
+        await ctx.reply(outcome.text);
+        break;
+    }
+    await sendScreen(ctx, await renderGrowth(deps));
     return;
   }
 

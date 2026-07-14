@@ -718,6 +718,18 @@ export function renderSetToxicityPolicyPrompt(): Screen {
   };
 }
 
+/** Экран-приглашение: жду ссылку/@username чужого канала для вета (Шаг 12g). */
+export function renderVetPrompt(): Screen {
+  return {
+    text:
+      "🔍 Проверка канала перед закупкой рекламы\n\nПришли @username или ссылку на " +
+      "публичный канал (например @favoritehoro или t.me/favoritehoro).\n\n" +
+      "Бот вытянет данные Telemetr и даст быстрый вердикт 🟢/🟡/🔴: живой канал, " +
+      "накрутка или взаимопиар-сетка. Каждая проверка тратит запросы Telemetr.",
+    keyboard: buildKeyboard([navRow(encodeCb("grow"))]),
+  };
+}
+
 /** Экран-приглашение: жду стоп-слово для модерации (Шаг 11d). */
 export function renderAddStopWordPrompt(): Screen {
   return {
@@ -1113,6 +1125,7 @@ export async function renderGrowth(deps: AdminDeps): Promise<Screen> {
         },
       ],
       [{ label: "🧪 Эксперименты", data: encodeCb("exp") }],
+      [{ label: "🔍 Проверка канала", data: encodeCb("vet") }],
       [{ label: "📨 Отчёт по просмотрам", data: encodeCb("an") }],
       navRow(),
     ]),

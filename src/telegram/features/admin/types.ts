@@ -60,6 +60,8 @@ export type PendingInput =
   | { readonly kind: "addStopWord" }
   // Шаг 11e — модерация: правило политики токсичности (свободный текст).
   | { readonly kind: "setToxicityPolicy" }
+  // Шаг 12g — вет: ссылка/@username чужого канала для проверки перед закупкой рекламы.
+  | { readonly kind: "vetChannel" }
   | {
       readonly kind: "editPostField";
       readonly field: "title" | "text" | "cta";

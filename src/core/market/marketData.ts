@@ -35,6 +35,21 @@ export interface SubscriberPoint {
 }
 
 /**
+ * Расширенный срез для вета ЧУЖОГО канала перед закупкой рекламы (Шаг 12g).
+ * Берёт всё из `ChannelMarketStat` + два поля `/channels/stat`, которые нужны
+ * только вердикту вета и которых нет в секции «🌍 Рынок»:
+ *  - `scoringRate` — оценка качества канала 0..10 (как её считает Telemetr);
+ *  - `mentioningChannelsCount` — в СКОЛЬКИХ каналах канал упоминали (не число
+ *    упоминаний, а число разных источников — детектор взаимопиар-сетки/фермы).
+ * Отдельный тип, а не поля в `ChannelMarketStat`, чтобы не трогать кэш и секцию
+ * рынка своего канала (12e): вет — самостоятельный путь без кэша.
+ */
+export interface ChannelVettingStat extends ChannelMarketStat {
+  readonly scoringRate: number;
+  readonly mentioningChannelsCount: number;
+}
+
+/**
  * Провайдер рыночных данных. `channelRef` — публичная ссылка канала
  * (`@username`). Нет данных / ошибка / лимит API → `null`: рыночные фичи
  * гаснут, бот работает как раньше (мягкая деградация, как у Pexels).
@@ -46,4 +61,8 @@ export interface MarketDataProvider {
   fetchSubscriberHistory(
     channelRef: string,
   ): Promise<readonly SubscriberPoint[] | null>;
+  /** Расширенный срез для вета чужого канала (12g): + оценка + сеть упоминаний. */
+  fetchChannelVetting(
+    channelRef: string,
+  ): Promise<ChannelVettingStat | null>;
 }

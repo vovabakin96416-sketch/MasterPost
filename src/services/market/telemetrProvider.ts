@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Logger } from "pino";
 import type {
   ChannelMarketStat,
+  ChannelVettingStat,
   MarketDataProvider,
   SubscriberPoint,
 } from "../../core/market/marketData.js";
@@ -30,6 +31,20 @@ const statResponseSchema = z.object({
     err_percent: z.number(),
     daily_reach: z.number(),
     mentions_count: z.number(),
+  }),
+});
+
+/** Расширенная форма `/channels/stat` для вета чужого канала (12g): + оценка + сеть упоминаний. */
+const vettingResponseSchema = z.object({
+  status: z.literal("ok"),
+  response: z.object({
+    participants_count: z.number(),
+    avg_post_reach: z.number(),
+    err_percent: z.number(),
+    daily_reach: z.number(),
+    mentions_count: z.number(),
+    scoring_rate: z.number(),
+    mentioning_channels_count: z.number(),
   }),
 });
 
@@ -133,6 +148,34 @@ export function createTelemetrProvider(
         errPercent: r.err_percent,
         dailyReach: r.daily_reach,
         mentionsCount: r.mentions_count,
+      };
+    },
+
+    async fetchChannelVetting(
+      channelRef,
+    ): Promise<ChannelVettingStat | null> {
+      const body = await requestJson("/channels/stat", {
+        channelId: channelRef,
+      });
+      if (body === null) {
+        return null;
+      }
+      const parsed = vettingResponseSchema.safeParse(body);
+      if (!parsed.success) {
+        cfg.logger.warn(
+          "Telemetr: неожиданная форма ответа /channels/stat (вет)",
+        );
+        return null;
+      }
+      const r = parsed.data.response;
+      return {
+        subscribers: r.participants_count,
+        avgPostReach: r.avg_post_reach,
+        errPercent: r.err_percent,
+        dailyReach: r.daily_reach,
+        mentionsCount: r.mentions_count,
+        scoringRate: r.scoring_rate,
+        mentioningChannelsCount: r.mentioning_channels_count,
       };
     },
 
