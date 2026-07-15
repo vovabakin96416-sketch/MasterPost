@@ -105,7 +105,8 @@ describe("sendApprovalPreview: превью одобрения всегда до
     expect(sendMessage).toHaveBeenCalledTimes(3);
     const notify = sendMessage.mock.calls[2];
     expect(notify[0]).toBe(42);
-    expect(String(notify[1])).toContain("Прислать на тест");
+    // Подсказка ведёт в список очереди — до Шага 14 она звала к кнопке, которой не было.
+    expect(String(notify[1])).toContain("Прислать превью с кнопками");
   });
 });
 

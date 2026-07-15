@@ -6,11 +6,20 @@ import {
   resolveChannelMenu,
   resolvePostingChannelSelected,
   resolveSelectedChannel,
+  resolveSelectedChannelId,
 } from "./channelContext.js";
 import { readAutopostConfig } from "../../../services/autopostSettings.js";
 import { readCooldownHours } from "../../../services/cooldownSettings.js";
 import { isApprovalEnabled } from "../../../services/approvalService.js";
-import { countPending } from "../../../db/repositories/pendingPostRepository.js";
+import {
+  countPending,
+  getPending,
+  listPending,
+} from "../../../db/repositories/pendingPostRepository.js";
+import {
+  buildQueueSummaryLine,
+  summarisePendingQueue,
+} from "../../../core/approval/queueSummary.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../../../core/schedule/resolveCampaignDay.js";
 import { postStatus } from "../../../core/schedule/postStatus.js";
@@ -862,16 +871,33 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }
 
-/** Экран — одобрение постов (Шаг 5): тумблер + сколько ждут + тест-превью. */
-export async function renderApproval(deps: AdminDeps): Promise<Screen> {
-  const channel = await resolveSelectedChannel(deps);
+/** Сколько постов очереди показываем на одной странице списка. */
+const PAGE_PENDING = 8;
+
+/** Дата постановки в очередь для списка — «дд.мм» в поясе канала. */
+function queueDate(date: Date, tz: string): string {
+  const d = localDateParts(date, tz);
+  return `${String(d.day).padStart(2, "0")}.${String(d.month).padStart(2, "0")}`;
+}
+
+/**
+ * Экран — одобрение постов (Шаг 5): тумблер + РАСШИФРОВКА очереди + список постов.
+ *
+ * Раньше здесь было голое «Ждут одобрения: N» — непонятно, что это за посты и откуда
+ * они. Теперь число объясняет себя: разбивка по источнику, возраст и сам список.
+ */
+export async function renderApproval(deps: AdminDeps, page = 0): Promise<Screen> {
+  // Не `resolveSelectedChannel`: списку нужен пояс канала, чтобы дата постановки в
+  // очередь совпадала с той, что владелец видит в остальных экранах.
+  const channel = await resolvePostingChannelSelected(deps);
   if (channel === null) {
     return noChannelScreen();
   }
-  const [enabled, waiting] = await Promise.all([
+  const [enabled, items] = await Promise.all([
     isApprovalEnabled(deps.prisma, channel.id),
-    countPending(deps.prisma, channel.id),
+    listPending(deps.prisma, channel.id),
   ]);
+  const summary = summarisePendingQueue(items);
 
   const lines = [
     "📋 Одобрение постов",
@@ -881,19 +907,78 @@ export async function renderApproval(deps: AdminDeps): Promise<Screen> {
       ? "Перед публикацией бот присылает тебе превью с кнопками — пост уходит в канал только после «✅ Опубликовать»."
       : "Посты публикуются автоматически, без предварительного показа.",
     "",
-    `Ждут одобрения: ${String(waiting)}`,
+    buildQueueSummaryLine(
+      summary,
+      summary.oldest === null ? null : queueDate(summary.oldest, channel.timezone),
+    ),
+  ];
+  if (summary.total > 0) {
+    lines.push("Пост ждёт решения, пока по нему не нажата кнопка — сам он не исчезает.");
+  }
+
+  const pg = paginate(items, page, PAGE_PENDING);
+  const rows: Btn[][] = pg.slice.map((item) => [
+    {
+      // Источник видно прямо в строке: 🤖 — сочинил AI, 📅 — пост контент-плана.
+      label: `${item.externalId === null ? "🤖" : "📅"} ${queueDate(
+        item.createdAt,
+        channel.timezone,
+      )} · ${preview(item.title, 24)} ›`,
+      data: encodeCb("api", item.id),
+    },
+  ]);
+  const pager = pageRow(pg.page, pg.hasPrev, pg.hasNext, (p) => encodeCb("appr", p));
+  if (pager.length > 0) {
+    rows.push(pager);
+  }
+  rows.push([
+    {
+      label: enabled ? "🔇 Выключить одобрение" : "✅ Включить одобрение",
+      data: encodeCb("aptgl"),
+    },
+  ]);
+  rows.push(navRow());
+
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/**
+ * Карточка поста из очереди: что за пост, откуда и с какого числа ждёт.
+ *
+ * Кнопок решения («Опубликовать» и т.п.) здесь намеренно НЕТ: их обработчики
+ * переписывают сообщение, на котором нажали, — на экране меню это стёрло бы навигацию.
+ * Поэтому «прислать превью» отправляет рабочее превью с кнопками отдельным сообщением.
+ */
+export async function renderPendingItem(
+  deps: AdminDeps,
+  pendingId: string,
+): Promise<Screen> {
+  const channel = await resolveSelectedChannelId(deps);
+  if (channel === null) {
+    return noChannelScreen();
+  }
+  const pending = await getPending(deps.prisma, pendingId);
+  if (pending === null) {
+    return {
+      text: "Пост не найден — возможно, он уже опубликован или отменён.",
+      keyboard: buildKeyboard([navRow(encodeCb("appr", 0))]),
+    };
+  }
+  const lines = [
+    `📋 ${pending.title}`,
+    "",
+    pending.externalId === null
+      ? "Источник: 🤖 пост сочинил AI"
+      : `Источник: 📅 контент-план (пост №${String(pending.externalId)})`,
+    "",
+    preview(pending.text, 400),
   ];
 
   const rows: Btn[][] = [
-    [
-      {
-        label: enabled ? "🔇 Выключить одобрение" : "✅ Включить одобрение",
-        data: encodeCb("aptgl"),
-      },
-    ],
-    navRow(),
+    [{ label: "👀 Прислать превью с кнопками", data: encodeCb("apre", pendingId) }],
+    [{ label: "❌ Убрать из очереди", data: encodeCb("apdel", pendingId) }],
+    navRow(encodeCb("appr", 0)),
   ];
-
   return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
 }
 

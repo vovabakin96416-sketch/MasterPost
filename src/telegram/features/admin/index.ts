@@ -23,9 +23,11 @@ import {
 import { setCooldownHours } from "../../../services/cooldownSettings.js";
 import {
   requestApprovalForPost,
+  resendApprovalPreview,
   type PostingDeps,
   type PreviewNowResult,
 } from "../../../services/postingService.js";
+import { deletePending } from "../../../db/repositories/pendingPostRepository.js";
 import {
   requestAiPostApproval,
   type AiPostApprovalDeps,
@@ -101,6 +103,7 @@ import {
   renderEditAnswerPrompt,
   renderAddTimePrompt,
   renderApproval,
+  renderPendingItem,
   renderAutopost,
   renderMain,
   renderSetChannelPrompt,
@@ -688,9 +691,49 @@ async function routeCallback(
     }
 
     case "appr":
-      await editScreen(ctx, await renderApproval(deps));
+      await editScreen(ctx, await renderApproval(deps, intArg(args, 0) ?? 0));
       await ctx.answerCallbackQuery();
       return;
+
+    // Карточка поста из очереди: `api:<cuid>` — id строковый, не индекс (список
+    // меняется между рендерами, а cuid ~25 символов и в лимит 64 байта влезает).
+    case "api": {
+      const id = args[0];
+      if (id === undefined || id === "") {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await editScreen(ctx, await renderPendingItem(deps, id));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "apre": {
+      const id = args[0];
+      if (id === undefined || id === "") {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const result = await resendApprovalPreview(postingDepsOf(ctx, deps), id);
+      await ctx.answerCallbackQuery(
+        result.ok
+          ? { text: "👀 Превью с кнопками отправлено ниже" }
+          : { text: "Пост уже обработан или не найден.", show_alert: true },
+      );
+      return;
+    }
+
+    case "apdel": {
+      const id = args[0];
+      if (id === undefined || id === "") {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await deletePending(deps.prisma, id);
+      await editScreen(ctx, await renderApproval(deps, 0));
+      await ctx.answerCallbackQuery({ text: "Убрано из очереди" });
+      return;
+    }
 
     case "aptgl": {
       const channel = await resolveSelectedChannel(deps);
@@ -717,16 +760,11 @@ async function routeCallback(
         await ctx.answerCallbackQuery({ text: "Канал не найден.", show_alert: true });
         return;
       }
-      const postingDeps: PostingDeps = {
-        prisma: deps.prisma,
-        logger: deps.logger,
-        api: ctx.api,
-        adminId: deps.adminId,
-        pexelsApiKey: deps.pexelsApiKey,
-        anthropicApiKey: deps.anthropicApiKey,
-        timeoutMs: deps.timeoutMs,
-      };
-      const result = await requestApprovalForPost(postingDeps, channel.id, externalId);
+      const result = await requestApprovalForPost(
+        postingDepsOf(ctx, deps),
+        channel.id,
+        externalId,
+      );
       await ctx.answerCallbackQuery({
         text: previewResultText(result),
         show_alert: !result.ok,
@@ -1823,6 +1861,19 @@ function applyWinnerToast(result: ApplyResult): string {
     case "auto_off":
       return "Авто-применение выключено";
   }
+}
+
+/** Зависимости публикации из контекста апдейта (`api` берём из ctx, как в approval). */
+function postingDepsOf(ctx: Context, deps: AdminDeps): PostingDeps {
+  return {
+    prisma: deps.prisma,
+    logger: deps.logger,
+    api: ctx.api,
+    adminId: deps.adminId,
+    pexelsApiKey: deps.pexelsApiKey,
+    anthropicApiKey: deps.anthropicApiKey,
+    timeoutMs: deps.timeoutMs,
+  };
 }
 
 /** Текст тоста по результату отправки тестового превью на одобрение. */

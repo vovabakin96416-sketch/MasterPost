@@ -101,10 +101,39 @@ export async function deletePending(prisma: PrismaClient, id: string): Promise<v
   await prisma.pendingPost.deleteMany({ where: { id } });
 }
 
-/** Сколько постов ждут одобрения (для экрана меню). */
+/** Сколько постов ждут одобрения (для бейджа на главном экране). */
 export async function countPending(
   prisma: PrismaClient,
   channelId: string,
 ): Promise<number> {
   return prisma.pendingPost.count({ where: { channelId } });
+}
+
+/**
+ * Строка для СПИСКА очереди: подпись кнопки + разбивка по источнику. Отдельно от
+ * `PendingPostRow`, потому что списку не нужны text/photoUrl/pexelsQuery — их читает
+ * только превью конкретного поста.
+ */
+export interface PendingPostListRow {
+  readonly id: string;
+  readonly title: string;
+  /** `null` — пост сочинил AI; иначе это пост контент-плана (его `externalId`). */
+  readonly externalId: number | null;
+  readonly createdAt: Date;
+}
+
+/**
+ * Все посты очереди канала, старые сверху (в том же порядке их и разгребают).
+ * Пагинацию делает экран через `paginate` — очередь измеряется десятками строк,
+ * поэтому дешевле прочитать разом, чем гонять limit/offset на каждый листаж.
+ */
+export async function listPending(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<PendingPostListRow[]> {
+  return prisma.pendingPost.findMany({
+    where: { channelId },
+    select: { id: true, title: true, externalId: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
+  });
 }

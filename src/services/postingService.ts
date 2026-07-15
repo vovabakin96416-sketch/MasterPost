@@ -522,7 +522,7 @@ export async function sendApprovalPreview(
     deps.logger.error({ err }, "не смог отправить даже текстовое превью одобрения");
     await notifyAdmin(
       deps,
-      `⚠️ Не удалось прислать пост на одобрение (id ${pendingId}). Откройте «📋 Меню → Одобрение постов» и нажмите на посте «👀 Прислать на тест».`,
+      `⚠️ Не удалось прислать пост на одобрение (id ${pendingId}). Открой «📋 Меню → Одобрение», найди пост в списке и нажми «👀 Прислать превью с кнопками».`,
     );
   }
 }
@@ -699,6 +699,33 @@ export async function sendPendingPreview(
     buildPostMessage(pending),
     photoRefFromCache(pending.photoUrl),
     keyboard,
+  );
+  return { ok: true };
+}
+
+/**
+ * Шлёт админу превью одобрения ЗАНОВО по id очереди (экран «📋 Одобрение» → карточка
+ * поста). Нужен, когда исходное превью потерялось: раньше до такого поста нельзя было
+ * добраться вообще, а счётчик очереди его считал.
+ *
+ * Кнопки решения живут на этом превью, а не на экране меню, намеренно: их обработчики
+ * переписывают сообщение, на котором нажали (`editResolved`), — на экране меню это
+ * стёрло бы навигацию и оставило админа в тупике.
+ */
+export async function resendApprovalPreview(
+  deps: PostingDeps,
+  pendingId: string,
+): Promise<PendingPreviewResult> {
+  const pending = await getPending(deps.prisma, pendingId);
+  if (pending === null) {
+    return { ok: false, reason: "not_found" };
+  }
+  const channel = await getPostingChannelById(deps.prisma, pending.channelId);
+  await sendApprovalPreview(
+    deps,
+    buildApprovalCaption(pending, channel?.chatId ?? null),
+    pendingId,
+    photoRefFromCache(pending.photoUrl),
   );
   return { ok: true };
 }
