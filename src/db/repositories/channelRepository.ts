@@ -6,6 +6,11 @@ import {
 import { setJsonSetting } from "./settingRepository.js";
 
 /** Данные канала под upsert. Nullable-поля передаём явно (null, не undefined). */
+/**
+ * Метаданные канала для сида. `campaignStart` сюда НЕ входит намеренно: единственный
+ * писатель старта — `ensureCampaignStart` (см. ниже). Иначе сид, у которого старт был
+ * бы `null`, затирал бы уже зафиксированный старт при каждом прогоне.
+ */
 export interface ChannelSeed {
   title: string;
   username: string;
@@ -18,12 +23,16 @@ export interface ChannelSeed {
   timezone: string;
   triggerWords: string[];
   isActive: boolean;
-  campaignStart: Date | null;
 }
 
 /**
  * Идемпотентно создаёт/обновляет канал по уникальному username.
  * Возвращает id канала — он нужен как внешний ключ для постов и пулов.
+ *
+ * ⚠️ `campaignStart` не трогаем ни в `create`, ни в `update` — это РАНТАЙМ-состояние
+ * (когда план реально стартовал), а не метаданные канала. Раньше сид гнал сюда
+ * `campaignStart: null` через `update: data`, и каждый `npm run seed` сбрасывал старт →
+ * `resolveCampaignDay` навсегда отдавал «неделю 1», а план крутил одни и те же посты.
  */
 export async function upsertChannel(
   prisma: PrismaClient,

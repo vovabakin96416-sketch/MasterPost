@@ -14,6 +14,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "seed": "tsx src/seed/index.ts",
+    "backfill-campaign-start": "tsx src/seed/backfillCampaignStart.ts",
     "gen-session": "tsx scripts/generateSession.ts",
     "gen-session-qr": "tsx scripts/generateSession.ts --qr",
     "try-ai": "tsx scripts/tryGeneratePost.ts"

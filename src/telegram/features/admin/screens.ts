@@ -836,10 +836,14 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
     `Статус: ${config.enabled ? "ВКЛ ✅" : "ВЫКЛ 🔇"}`,
     `AI когда план пуст: ${config.aiEnabled ? "ВКЛ 🤖" : "ВЫКЛ 🔇"}`,
     `Канал публикации: ${channel.chatId ?? "не задан ⚠️"}`,
-    `Сейчас: неделя ${String(week)}, ${DAY_RU[day] ?? day}`,
+    `Сейчас: неделя ${String(week)}, ${DAY_RU[day] ?? day} · ${planSince(
+      channel.campaignStart,
+      channel.timezone,
+    )}`,
     timesLine,
     `Пояс: ${channel.timezone}`,
     "",
+    ...(channel.campaignStart === null ? [PLAN_NOT_STARTED, ""] : []),
     "Бот публикует посты дня по порядку в эти времена.",
     config.aiEnabled
       ? "🤖 Если на слот нет готового поста — бот сам напишет пост голосом канала. Показ/публикация подчиняются тумблеру «📋 Одобрение»."
@@ -874,11 +878,30 @@ export async function renderAutopost(deps: AdminDeps): Promise<Screen> {
 /** Сколько постов очереди показываем на одной странице списка. */
 const PAGE_PENDING = 8;
 
-/** Дата постановки в очередь для списка — «дд.мм» в поясе канала. */
-function queueDate(date: Date, tz: string): string {
+/** Короткая дата «дд.мм» в поясе канала (списки очереди, старт плана). */
+function shortDate(date: Date, tz: string): string {
   const d = localDateParts(date, tz);
   return `${String(d.day).padStart(2, "0")}.${String(d.month).padStart(2, "0")}`;
 }
+
+/**
+ * Откуда отсчитывается неделя плана — приписка к номеру недели. Без этого номер
+ * выглядит взятым с потолка: владелец видит «неделя 1», но не понимает, почему она
+ * не меняется.
+ */
+function planSince(campaignStart: Date | null, tz: string): string {
+  return campaignStart === null
+    ? "план ещё не начат"
+    : `план идёт с ${shortDate(campaignStart, tz)}`;
+}
+
+/**
+ * Почему недели стоят. Показываем на КАЖДОМ экране с неделей (а не только в «Плане»):
+ * пустой `campaignStart` — единственная причина вечной «недели 1», и раньше об этом
+ * можно было узнать лишь на одном экране из трёх.
+ */
+const PLAN_NOT_STARTED =
+  "⚠️ Поэтому неделя не меняется: план ещё ни разу не запускался. Включи «📅 Автопостинг» — с этого дня недели пойдут 1 → 2 → 3 → 4.";
 
 /**
  * Экран — одобрение постов (Шаг 5): тумблер + РАСШИФРОВКА очереди + список постов.
@@ -909,7 +932,7 @@ export async function renderApproval(deps: AdminDeps, page = 0): Promise<Screen>
     "",
     buildQueueSummaryLine(
       summary,
-      summary.oldest === null ? null : queueDate(summary.oldest, channel.timezone),
+      summary.oldest === null ? null : shortDate(summary.oldest, channel.timezone),
     ),
   ];
   if (summary.total > 0) {
@@ -920,7 +943,7 @@ export async function renderApproval(deps: AdminDeps, page = 0): Promise<Screen>
   const rows: Btn[][] = pg.slice.map((item) => [
     {
       // Источник видно прямо в строке: 🤖 — сочинил AI, 📅 — пост контент-плана.
-      label: `${item.externalId === null ? "🤖" : "📅"} ${queueDate(
+      label: `${item.externalId === null ? "🤖" : "📅"} ${shortDate(
         item.createdAt,
         channel.timezone,
       )} · ${preview(item.title, 24)} ›`,
@@ -1003,10 +1026,14 @@ export async function renderAnalytics(deps: AdminDeps): Promise<Screen> {
   const lines = [
     "📨 Отчёт по просмотрам",
     "",
-    `План: неделя ${String(week)} из 4`,
+    `План: неделя ${String(week)} из 4 · ${planSince(
+      channel.campaignStart,
+      channel.timezone,
+    )}`,
     shouldWarnContentEnding(week)
       ? "⚠️ Идёт последняя неделя — пора готовить контент на новый месяц."
       : "Напоминание о конце контента придёт в воскресенье недели 4.",
+    ...(channel.campaignStart === null ? [PLAN_NOT_STARTED] : []),
     "",
     mtprotoReady
       ? "MTProto: настроен ✅ — отчёт по просмотрам приходит в ПН 09:30 МСК."
@@ -1106,14 +1133,14 @@ export async function renderCalendar(deps: AdminDeps): Promise<Screen> {
   const lines = [
     "📅 План",
     "",
-    `Неделя ${String(week)} из 4 · сегодня ${DAY_RU[today.weekday] ?? today.weekday}`,
+    `Неделя ${String(week)} из 4 · ${planSince(
+      channel.campaignStart,
+      channel.timezone,
+    )} · сегодня ${DAY_RU[today.weekday] ?? today.weekday}`,
     "Легенда: ✅ прошёл · ▶️ сегодня · 🔜 впереди",
   ];
   if (channel.campaignStart === null) {
-    lines.push(
-      "",
-      "⚠️ Старт плана ещё не зафиксирован — включи «📅 Автопостинг», и недели пойдут по порядку.",
-    );
+    lines.push("", PLAN_NOT_STARTED);
   }
   if (posts.length === 0) {
     lines.push("", "В этой неделе постов нет.");

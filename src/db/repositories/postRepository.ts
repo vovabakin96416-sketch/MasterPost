@@ -266,6 +266,23 @@ export async function getPostsForWeek(
   });
 }
 
+/**
+ * Когда канал опубликовал самый первый пост (или `null`, если ещё ни одного).
+ * Нужен бэкфиллу старта кампании: если план уже работал, честная дата старта — это
+ * дата первой публикации, а не «сегодня».
+ */
+export async function getFirstPublishedAt(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<Date | null> {
+  const row = await prisma.post.findFirst({
+    where: { channelId, publishedAt: { not: null } },
+    select: { publishedAt: true },
+    orderBy: { publishedAt: "asc" },
+  });
+  return row?.publishedAt ?? null;
+}
+
 /** Поле поста, которое редактируем из меню (Шаг 6.5). */
 export type EditablePostField = "title" | "text" | "cta";
 
