@@ -306,6 +306,30 @@ export async function listChannels(
 }
 
 /**
+ * Каналы КОНКРЕТНОГО владельца (Шаг 14a) — та же форма и порядок, что у `listChannels`,
+ * плюс фильтр по `ownerId`. Пока не используется: переключатель меню перейдёт на неё
+ * в 14b, когда включим разграничение доступа. `listChannels` (все каналы) остаётся —
+ * она нужна рантайму и супервладельцу.
+ */
+export async function listChannelsByOwner(
+  prisma: PrismaClient,
+  ownerId: string,
+): Promise<ChannelListItem[]> {
+  return prisma.channel.findMany({
+    where: { ownerId },
+    select: {
+      id: true,
+      title: true,
+      username: true,
+      chatId: true,
+      niche: true,
+      isActive: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+/**
  * Создаёт ПУСТОЙ канал (без контент-плана/пулов) для мультиканальности (Шаг 8a).
  * Минимум полей: название от владельца + ниша-заглушка; остальное — дефолты схемы
  * (язык ru, пояс Europe/Moscow, isActive, пустые triggerWords). Отдельно от

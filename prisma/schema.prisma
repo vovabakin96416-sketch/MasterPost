@@ -55,6 +55,21 @@ enum ExperimentStatus {
   stopped
 }
 
+// Владелец каналов (Шаг 14a) — арендатор SaaS. Фундамент мультитенанта: до 14a бот
+// одно-арендный (единственный ADMIN_ID), и каналы никому не «принадлежали».
+// Супервладелец (= ADMIN_ID) заводится идемпотентно при старте (`ensureOwner`).
+// Поля тарифа/триала (plan, trialEndsAt) сознательно отложены на 14e — здесь только
+// личность владельца. Разграничение доступа по владельцу включается в 14b.
+model Owner {
+  id             String   @id @default(cuid())
+  telegramUserId String   @unique // числовой Telegram user id (строкой — как chatId)
+  name           String? // отображаемое имя для экрана «Владельцы» (14b)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  channels Channel[]
+}
+
 // Канал — корень всех данных. Хранит тематику и настройки, не код.
 model Channel {
   id            String    @id @default(cuid())
@@ -73,6 +88,14 @@ model Channel {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  // Владелец канала (Шаг 14a). NULLABLE намеренно: существующие каналы бэкофиллятся
+  // на супервладельца при старте (`claimOrphanChannels`), а `createChannel`/онбординг
+  // начнут штамповать владельца только в 14b. Пока по `ownerId` НИЧЕГО не фильтруется,
+  // поэтому канал без владельца ведёт себя ровно как раньше. `SetNull` при удалении
+  // владельца — не роняем его контент (каналы вернутся супервладельцу на следующем старте).
+  ownerId String?
+  owner   Owner?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
   posts        Post[]
   textPools    TextPool[]
   settings     Setting[]
@@ -82,6 +105,8 @@ model Channel {
   postMetrics  PostMetric[]
   statSnapshots ChannelStatSnapshot[]
   experiments  Experiment[]
+
+  @@index([ownerId])
 }
 
 // Пост контент-плана. Поля повторяют content.json.

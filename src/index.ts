@@ -3,6 +3,10 @@ import { autoRetry } from "@grammyjs/auto-retry";
 import { parseEnv } from "./config/env.js";
 import { createLogger } from "./lib/logger.js";
 import { createPrismaClient } from "./db/client.js";
+import {
+  claimOrphanChannels,
+  ensureOwner,
+} from "./db/repositories/ownerRepository.js";
 import { createBot } from "./telegram/bot.js";
 import { startScheduler } from "./scheduler/index.js";
 import { startAnalyticsScheduler } from "./scheduler/analytics.js";
@@ -37,6 +41,23 @@ async function main(): Promise<void> {
 
   const server = startHealthServer(env.PORT, logger);
   const prisma = createPrismaClient(env.DATABASE_URL);
+
+  // Шаг 14a: фундамент мультитенанта. Идемпотентно заводим супервладельца (= ADMIN_ID)
+  // и отдаём ему каналы без владельца (бэкофилл существующих + каналы, созданные через
+  // «➕ Добавить канал», — их штамповка появится в 14b). Поведение бота НЕ меняется:
+  // по `ownerId` пока ничего не фильтруется. Сбой не фатален — на 14a от владельца
+  // ничего не зависит, поэтому пишем в лог и работаем дальше.
+  try {
+    const superOwnerId = await ensureOwner(prisma, env.ADMIN_ID);
+    const claimed = await claimOrphanChannels(prisma, superOwnerId);
+    logger.info(
+      { superOwnerId, claimed },
+      "супервладелец готов; каналы без владельца присвоены",
+    );
+  } catch (err) {
+    logger.error({ err }, "не смог завести супервладельца / присвоить каналы");
+  }
+
   // Шаг 7b: чистый конфиг MTProto (без GramJS) — только для статуса в меню «Аналитика».
   const mtproto = {
     apiId: env.TELEGRAM_API_ID,
