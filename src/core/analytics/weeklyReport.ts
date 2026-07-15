@@ -7,6 +7,8 @@
  * и отправка живут выше (сервис), чтобы core не зависел от GramJS/БД/Telegram.
  */
 
+import { buildPostLink, type PostLinkRef } from "./postLink.js";
+
 /** Метрики одного поста (плоский тип — GramJS-типы наружу не «протекают»). */
 export interface PostMetricInput {
   readonly messageId: number;
@@ -87,10 +89,41 @@ const PREVIEW_LIMIT = 50;
 /** Превью лучшего поста чуть длиннее (как `[:60]` в Python). */
 const BEST_PREVIEW_LIMIT = 60;
 
-/** Чистит текст для подписи: убирает переносы и `*` (ломают Markdown), обрезает. */
+/** Превью пустое (фото без подписи) — чтобы у строки/ссылки был видимый текст. */
+const NO_CAPTION = "без подписи";
+
+/**
+ * Чистит текст для подписи: убирает переносы и `*` (ломают Markdown), обрезает и
+ * добавляет «…», если резали.
+ *
+ * ⚠️ `[`, `]`, `(`, `)` тоже вырезаем: превью подставляется в Markdown-ссылку
+ * `[превью](url)`, и любая скобка из текста поста порвёт разметку — тогда
+ * `sendToAdmin` откатится на плейн-текст для ВСЕГО отчёта.
+ */
 function cleanPreview(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, " ").replace(/\*/g, "").trim();
-  return flat.length > max ? flat.slice(0, max) : flat;
+  const flat = text
+    .replace(/\s+/g, " ")
+    .replace(/[*[\]()]/g, "")
+    .trim();
+  if (flat === "") {
+    return NO_CAPTION;
+  }
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/**
+ * Подпись поста в отчёте: кликабельная ссылка, если её удалось построить, иначе — прежний
+ * курсив. Курсива ВНУТРИ ссылки нет намеренно: отчёт уходит с legacy `parse_mode:
+ * "Markdown"`, который не поддерживает вложенные сущности — `[_текст_](url)` сломается.
+ */
+function previewLine(
+  metric: PostMetricInput,
+  ref: PostLinkRef,
+  max: number,
+): string {
+  const preview = cleanPreview(metric.preview, max);
+  const link = buildPostLink(ref, metric.messageId);
+  return link === null ? `_${preview}_` : `[${preview}](${link})`;
 }
 
 /** Считает итоги недели: суммы, среднее (floor) и лучший пост по просмотрам. */
@@ -134,10 +167,14 @@ function formatPostDate(date: Date, tz: string): string {
  * Собирает текст отчёта за неделю (Markdown, как Python-бот). Посты сортируем по дате
  * по возрастанию (хронологический порядок — как `posts.reverse()` в Python). Пустой
  * список → понятная заглушка.
+ *
+ * `ref` — канал для ссылок на посты: превью каждого поста кликабельно, иначе из отчёта
+ * не понять, о каком именно посте речь (особенно у фото без подписи).
  */
 export function buildWeeklyReport(
   metrics: readonly PostMetricInput[],
   tz: string,
+  ref: PostLinkRef,
 ): string {
   const header = "📊 *Аналитика за прошлую неделю*";
   if (metrics.length === 0) {
@@ -151,11 +188,10 @@ export function buildWeeklyReport(
   const lines: string[] = [`${header}\n`];
   for (const m of sorted) {
     const dateStr = formatPostDate(m.postedAt, tz);
-    const preview = cleanPreview(m.preview, PREVIEW_LIMIT);
     lines.push(
       `📅 ${dateStr}\n` +
         `👁 ${String(m.views)} · ❤️ ${String(m.reactions)} · 💬 ${String(m.replies)}\n` +
-        `_${preview}…_\n`,
+        `${previewLine(m, ref, PREVIEW_LIMIT)}\n`,
     );
   }
 
@@ -169,9 +205,9 @@ export function buildWeeklyReport(
   );
 
   if (s.best !== null) {
-    const bestPreview = cleanPreview(s.best.preview, BEST_PREVIEW_LIMIT);
     lines.push(
-      `🏆 *Лучший пост:* _${bestPreview}…_\n👁 ${String(s.best.views)} просмотров`,
+      `🏆 *Лучший пост:* ${previewLine(s.best, ref, BEST_PREVIEW_LIMIT)}\n` +
+        `👁 ${String(s.best.views)} просмотров`,
     );
   }
 

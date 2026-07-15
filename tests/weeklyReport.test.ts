@@ -8,6 +8,10 @@ import {
 } from "../src/core/analytics/weeklyReport";
 
 const TZ = "Europe/Moscow";
+/** Канал по умолчанию — публичный, чтобы превью в отчёте было кликабельным. */
+const REF = { username: "sofia_gada1ka", chatId: "-1001234567890" };
+/** Канал без публичной ссылки — отчёт должен мягко откатиться на курсив. */
+const NO_REF = { username: null, chatId: null };
 
 function metric(over: Partial<PostMetricInput> = {}): PostMetricInput {
   return {
@@ -60,7 +64,7 @@ describe("summariseWeekly", () => {
 
 describe("buildWeeklyReport", () => {
   it("пустой список → понятная заглушка", () => {
-    const text = buildWeeklyReport([], TZ);
+    const text = buildWeeklyReport([], TZ, REF);
     expect(text).toContain("Аналитика за прошлую неделю");
     expect(text).toContain("Постов за последние 7 дней не найдено");
   });
@@ -77,6 +81,7 @@ describe("buildWeeklyReport", () => {
         }),
       ],
       TZ,
+      REF,
     );
     expect(text).toContain("📅 22.06 10:00"); // 07:00 UTC → 10:00 МСК
     expect(text).toContain("👁 120 · ❤️ 4 · 💬 3");
@@ -91,9 +96,56 @@ describe("buildWeeklyReport", () => {
     const text = buildWeeklyReport(
       [metric({ preview: "Строка*1\nСтрока 2" })],
       TZ,
+      REF,
     );
     expect(text).not.toContain("*1");
     expect(text).toContain("Строка1 Строка 2");
+  });
+
+  it("превью — кликабельная ссылка на пост (иначе не понять, о каком посте речь)", () => {
+    const text = buildWeeklyReport(
+      [metric({ messageId: 42, preview: "Карта дня" })],
+      TZ,
+      REF,
+    );
+    expect(text).toContain("[Карта дня](https://t.me/sofia_gada1ka/42)");
+  });
+
+  it("канал без username и chatId → прежний курсив, отчёт не ломается", () => {
+    const text = buildWeeklyReport([metric({ preview: "Карта дня" })], TZ, NO_REF);
+    expect(text).toContain("_Карта дня_");
+    expect(text).not.toContain("https://");
+  });
+
+  it("скобки в тексте поста не рвут Markdown-ссылку", () => {
+    const text = buildWeeklyReport(
+      [metric({ messageId: 7, preview: "Луна (в Скорпионе) [ретро]" })],
+      TZ,
+      REF,
+    );
+    // Внутри [...] не должно остаться ни одной скобки из текста поста.
+    expect(text).toContain("[Луна в Скорпионе ретро](https://t.me/sofia_gada1ka/7)");
+  });
+
+  it("фото без подписи → у ссылки есть видимый текст", () => {
+    const text = buildWeeklyReport(
+      [metric({ messageId: 8, preview: "" })],
+      TZ,
+      REF,
+    );
+    expect(text).toContain("[без подписи](https://t.me/sofia_gada1ka/8)");
+  });
+
+  it("лучший пост тоже кликабелен", () => {
+    const text = buildWeeklyReport(
+      [
+        metric({ messageId: 1, views: 10, preview: "Слабый" }),
+        metric({ messageId: 2, views: 900, preview: "Сильный" }),
+      ],
+      TZ,
+      REF,
+    );
+    expect(text).toContain("🏆 *Лучший пост:* [Сильный](https://t.me/sofia_gada1ka/2)");
   });
 
   it("сортирует посты хронологически независимо от входного порядка", () => {
@@ -111,6 +163,7 @@ describe("buildWeeklyReport", () => {
         }),
       ],
       TZ,
+      REF,
     );
     expect(text.indexOf("Ранний")).toBeLessThan(text.indexOf("Поздний"));
   });

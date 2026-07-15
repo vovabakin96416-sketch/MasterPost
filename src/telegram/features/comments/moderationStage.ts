@@ -4,6 +4,7 @@ import {
   type SpamReason,
 } from "../../../core/moderation/detectSpam.js";
 import { shouldCheckToxicity } from "../../../core/moderation/buildToxicityPrompt.js";
+import { buildPostLink } from "../../../core/analytics/postLink.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCommentChannel } from "./routing.js";
 import { getReplyChannelById } from "../../../db/repositories/channelRepository.js";
@@ -173,19 +174,17 @@ async function tryDelete(ctx: Context, deps: CommentDeps): Promise<boolean> {
   }
 }
 
-/** Строит ссылку на коммент в группе обсуждений (t.me/c/... для супергрупп). */
+/**
+ * Строит ссылку на коммент в группе обсуждений. Правило `-100…` → `t.me/c/…` живёт в
+ * ядре (`buildPostLink`) — здесь только достаём id из grammY-контекста.
+ */
 function buildCommentLink(ctx: Context): string | null {
   const chatId = ctx.chat?.id;
   const messageId = ctx.message?.message_id;
   if (chatId === undefined || messageId === undefined) {
     return null;
   }
-  // Супергруппы: -100XXXXXXXXXX → t.me/c/XXXXXXXXXX/<msgId>.
-  const raw = String(chatId);
-  if (!raw.startsWith("-100")) {
-    return null;
-  }
-  return `https://t.me/c/${raw.slice(4)}/${messageId}`;
+  return buildPostLink({ username: null, chatId: String(chatId) }, messageId);
 }
 
 /** Шлёт сигнал админу о нарушении. Ошибка разметки → ретрай без Markdown (как sendToAdmin). */

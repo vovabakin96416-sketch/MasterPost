@@ -95,7 +95,10 @@ async function collectReport(
     for (const metric of metrics) {
       await upsertPostMetric(deps.prisma, channel.id, metric);
     }
-    const weekly = buildWeeklyReport(metrics, channel.timezone);
+    const weekly = buildWeeklyReport(metrics, channel.timezone, {
+      username: channel.username,
+      chatId: channel.chatId,
+    });
     // Шаг 12c: после сырых чисел — секция Content Intelligence (выводы/рекомендации).
     // Метрики только что записаны в БД, так что отчёт читает свежие данные. 0 токенов.
     const growth = await buildGrowthReport(deps.prisma, channel.id, channel.timezone);
