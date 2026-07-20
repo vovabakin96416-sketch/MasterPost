@@ -1,4 +1,7 @@
-import { getPostingChannel } from "../../db/repositories/channelRepository.js";
+import {
+  getPostingChannel,
+  getPostingChannelById,
+} from "../../db/repositories/channelRepository.js";
 import { upsertPostMetric } from "../../db/repositories/postMetricRepository.js";
 import { buildWeeklyReport } from "../../core/analytics/weeklyReport.js";
 import { buildGrowthReport } from "./contentIntelligenceService.js";
@@ -12,7 +15,12 @@ import {
   type FullMtprotoConfig,
   type MtprotoConfig,
 } from "./mtprotoConfig.js";
-import { type AnalyticsDeps, sendToAdmin } from "../analyticsService.js";
+import {
+  type AnalyticsDeps,
+  ownerTargetOf,
+  sendToAdmin,
+  sendToUser,
+} from "../analyticsService.js";
 
 /**
  * Сервис еженедельного отчёта по просмотрам (Шаг 7c) — порт `weekly_stats_report`.
@@ -143,8 +151,9 @@ async function collectReport(
 }
 
 /**
- * Тик планировщика (ПН 09:30 МСК): собрать и прислать владельцу отчёт за неделю. Если
- * MTProto не настроен или нет канала — тихо (бот работает как раньше). Ошибки логируем.
+ * Тик планировщика (ПН 09:30 МСК): собрать и прислать владельцу КАНАЛА отчёт за
+ * неделю (14b-2; канал без владельца → супервладелец). Если MTProto не настроен или
+ * нет канала — тихо (бот работает как раньше). Ошибки логируем.
  */
 export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
   const cfg = deps.mtproto;
@@ -155,13 +164,14 @@ export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
   if (channel === null || channel.chatId === null) {
     return;
   }
+  const target = await ownerTargetOf(deps, channel.id);
   try {
     const report = await collectReport(
       deps,
       { ...channel, chatId: channel.chatId },
       cfg,
     );
-    await sendToAdmin(deps, report);
+    await sendToUser(deps, target, report);
     deps.logger.info("отправлен еженедельный отчёт по просмотрам");
     // Шаг 13e: ПН-обзор — момент подвести итог эксперимента. При ВКЛ авто-применении
     // и вердикте `winner` записываем победителя в стратегию канала (метрики только что
@@ -174,8 +184,9 @@ export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
         new Date(),
       );
       if (applied.status === "applied") {
-        await sendToAdmin(
+        await sendToUser(
           deps,
+          target,
           `🔁 Авто-применение: победитель эксперимента «${applied.dimensionLabel}» — ` +
             `вариант «${applied.variantLabel}» записан в стратегию канала.`,
         );
@@ -186,6 +197,7 @@ export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
   } catch (err) {
     deps.logger.error({ err }, "ошибка еженедельного отчёта по просмотрам");
     // Мёртвая сессия сама не оживёт — молчать нельзя, иначе отчёты пропадут навсегда.
+    // Чинит её супервладелец (env Railway), поэтому сигнал — ему, не владельцу канала.
     if (isSessionRevokedError(err)) {
       await sendToAdmin(deps, SESSION_REVOKED);
     }
@@ -194,15 +206,24 @@ export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
 
 /**
  * Принудительная отправка отчёта (тест-кнопка в меню). В отличие от джоба не молчит:
- * при «не настроено / нет канала / ошибка» шлёт владельцу понятное пояснение.
+ * при «не настроено / нет канала / ошибка» шлёт понятное пояснение. Шаг 14b-2:
+ * `channelId` — ВЫБРАННЫЙ канал нажавшего (раньше сервис брал первый канал в БД —
+ * чужой владелец получил бы не свой отчёт), а `deps.adminId` вызывающий задаёт
+ * нажавшим, так что все сообщения уходят ему.
  */
-export async function sendWeeklyReportNow(deps: WeeklyReportDeps): Promise<void> {
+export async function sendWeeklyReportNow(
+  deps: WeeklyReportDeps,
+  channelId?: string,
+): Promise<void> {
   const cfg = deps.mtproto;
   if (!isMtprotoConfigured(cfg)) {
     await sendToAdmin(deps, MTPROTO_NOT_CONFIGURED);
     return;
   }
-  const channel = await getPostingChannel(deps.prisma);
+  const channel =
+    channelId === undefined
+      ? await getPostingChannel(deps.prisma)
+      : await getPostingChannelById(deps.prisma, channelId);
   if (channel === null || channel.chatId === null) {
     await sendToAdmin(deps, NO_CHANNEL_TARGET);
     return;

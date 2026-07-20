@@ -31,10 +31,21 @@ const PARSE = "Bad Request: can't parse entities";
 const BAD_PHOTO = "Bad Request: failed to get HTTP URL content";
 const TOO_LONG = "Bad Request: message is too long";
 
+/**
+ * Prisma-заглушка для резолва владельца канала (Шаг 14b-2): канал без владельца →
+ * адресат уведомлений/превью падает на супервладельца (adminId 42).
+ */
+function ownerlessPrisma(extra: Record<string, unknown> = {}): PostingDeps["prisma"] {
+  return {
+    channel: { findUnique: vi.fn().mockResolvedValue({ owner: null }) },
+    ...extra,
+  } as unknown as PostingDeps["prisma"];
+}
+
 /** Собирает PostingDeps с подменённым Telegram API. */
 function makeDeps(api: Partial<Api>): PostingDeps {
   return {
-    prisma: {} as never,
+    prisma: ownerlessPrisma(),
     logger: silentLogger,
     api: api as unknown as Api,
     adminId: 42,
@@ -86,10 +97,16 @@ describe("sendApprovalPreview: превью одобрения всегда до
       .fn()
       .mockRejectedValueOnce(grammyError("sendMessage", TOO_LONG)) // внутри sendPost
       .mockResolvedValueOnce(undefined); // запасной простой текст
-    await sendApprovalPreview(makeDeps({ sendMessage }), "*caption*", "pending1", null);
+    await sendApprovalPreview(
+      makeDeps({ sendMessage }),
+      "ch1",
+      "*caption*",
+      "pending1",
+      null,
+    );
     expect(sendMessage).toHaveBeenCalledTimes(2);
     const fallback = sendMessage.mock.calls[1];
-    expect(fallback[0]).toBe(42); // adminId
+    expect(fallback[0]).toBe(42); // канал без владельца → супервладелец
     expect(fallback[1]).toBe("*caption*");
     expect(fallback[2]).toHaveProperty("reply_markup"); // клавиатура одобрения
     expect(fallback[2]).not.toHaveProperty("parse_mode"); // без Markdown
@@ -101,7 +118,13 @@ describe("sendApprovalPreview: превью одобрения всегда до
       .mockRejectedValueOnce(grammyError("sendMessage", TOO_LONG)) // внутри sendPost
       .mockRejectedValueOnce(grammyError("sendMessage", BAD_PHOTO)) // запасной текст
       .mockResolvedValueOnce(undefined); // notifyAdmin
-    await sendApprovalPreview(makeDeps({ sendMessage }), "*caption*", "pending1", null);
+    await sendApprovalPreview(
+      makeDeps({ sendMessage }),
+      "ch1",
+      "*caption*",
+      "pending1",
+      null,
+    );
     expect(sendMessage).toHaveBeenCalledTimes(3);
     const notify = sendMessage.mock.calls[2];
     expect(notify[0]).toBe(42);
@@ -115,10 +138,10 @@ describe("requestApprovalForDraft: обобщённая постановка в 
     // Без ключа Pexels фото не подберётся (photoUrl=null), сетевого вызова нет.
     const create = vi.fn().mockResolvedValue({ id: "p1" });
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 100 });
-    const prisma = {
+    const prisma = ownerlessPrisma({
       setting: { findUnique: vi.fn().mockResolvedValue(null) }, // media_tier не задан → free
       pendingPost: { create },
-    } as unknown as PostingDeps["prisma"];
+    });
     const deps: PostingDeps = { ...makeDeps({ sendMessage }), prisma };
 
     await requestApprovalForDraft(deps, "ch1", "@chan", {
@@ -177,7 +200,7 @@ describe("publishDuePostsForChannel: прогресс пишется после 
       approval_enabled: false,
     };
     const upsert = vi.fn().mockResolvedValue(undefined);
-    const prisma = {
+    const prisma = ownerlessPrisma({
       setting: {
         findUnique: vi.fn(
           ({ where }: { where: { channelId_key: { key: string } } }) => {
@@ -188,7 +211,7 @@ describe("publishDuePostsForChannel: прогресс пишется после 
         upsert,
       },
       post: { findMany: vi.fn().mockResolvedValue([postRow(1), postRow(2)]) },
-    } as unknown as PostingDeps["prisma"];
+    });
 
     // Первый пост падает не-Telegram ошибкой, второй уходит нормально.
     const sendMessage = vi

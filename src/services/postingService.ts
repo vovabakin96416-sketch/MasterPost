@@ -13,10 +13,12 @@ import {
 import { buildPostKeyboard } from "./postButtons.js";
 import {
   ensureCampaignStart,
+  getOwnerTelegramIdByChannelId,
   getPostingChannelById,
   listPostingChannels,
   type PostingChannel,
 } from "../db/repositories/channelRepository.js";
+import { resolveOwnerTarget } from "../core/approval/access.js";
 import { localDateParts } from "../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../core/schedule/resolveCampaignDay.js";
 import { dueTimes } from "../core/schedule/times.js";
@@ -59,8 +61,10 @@ import { buildAiDraft, type AiDraftFailure } from "./ai/aiPostApprovalService.js
  */
 
 /**
- * Зависимости публикации: БД, логгер, Telegram API, id админа, ключ Pexels (фото) и
- * ключ Anthropic (10c: AI-подхват в автопостинге — генерим пост, если план пуст).
+ * Зависимости публикации: БД, логгер, Telegram API, id супервладельца, ключ Pexels
+ * (фото) и ключ Anthropic (10c: AI-подхват в автопостинге — генерим пост, если план
+ * пуст). Шаг 14b-2: `adminId` — НЕ адресат превью/уведомлений, а фолбэк на случай
+ * канала без владельца (адресат — владелец канала, `channelNotifyTarget`).
  */
 export interface PostingDeps {
   prisma: PrismaClient;
@@ -224,12 +228,37 @@ async function registerCtaTrigger(
   }
 }
 
-/** Уведомление админу простым текстом; ошибку доставки только логируем. */
-async function notifyAdmin(deps: PostingDeps, text: string): Promise<void> {
+/**
+ * Telegram-адресат уведомлений/превью канала (Шаг 14b-2): владелец канала, без
+ * владельца — супервладелец. Сбой чтения не роняет вызвавшего: уведомление в этом
+ * случае уходит супервладельцу (лучше не тому, чем никому).
+ */
+async function channelNotifyTarget(
+  deps: PostingDeps,
+  channelId: string,
+): Promise<number> {
   try {
-    await deps.api.sendMessage(deps.adminId, text);
+    const ownerTelegramId = await getOwnerTelegramIdByChannelId(deps.prisma, channelId);
+    return resolveOwnerTarget(ownerTelegramId, deps.adminId);
   } catch (err) {
-    deps.logger.error({ err }, "не смог уведомить админа");
+    deps.logger.warn(
+      { err, channelId },
+      "не смог определить владельца канала — уведомляю супервладельца",
+    );
+    return deps.adminId;
+  }
+}
+
+/** Уведомление владельцу канала простым текстом; ошибку доставки только логируем. */
+async function notifyChannelOwner(
+  deps: PostingDeps,
+  channelId: string,
+  text: string,
+): Promise<void> {
+  try {
+    await deps.api.sendMessage(await channelNotifyTarget(deps, channelId), text);
+  } catch (err) {
+    deps.logger.error({ err, channelId }, "не смог уведомить владельца канала");
   }
 }
 
@@ -303,8 +332,9 @@ export async function publishDuePostsForChannel(
       date: today.isoDate,
       postedTimes: [...posted, ...due],
     });
-    await notifyAdmin(
+    await notifyChannelOwner(
       deps,
+      channel.id,
       "⚠️ Автопостинг включён, но канал публикации не задан. Открой «📅 Автопостинг → 🎯 Канал публикации».",
     );
     return;
@@ -340,8 +370,9 @@ export async function publishDuePostsForChannel(
         // голосом канала. Одобрение подчиняется общему тумблеру (approvalOn).
         await placeAiFallbackPost(deps, channel, approvalOn, idx === 0);
       } else if (post === undefined && idx === 0) {
-        await notifyAdmin(
+        await notifyChannelOwner(
           deps,
+          channel.id,
           `⚠️ Нет постов на сегодня. Неделя ${String(week)}, день ${today.weekday}. Проверьте контент-план.`,
         );
         logger.warn({ week, day: today.weekday, time }, "нет постов на сегодня");
@@ -398,7 +429,7 @@ async function placeAiFallbackPost(
       "AI-подхват автопостинга не удался",
     );
     if (notifyOnFail) {
-      await notifyAdmin(deps, aiFallbackFailText(built.reason, channel.title));
+      await notifyChannelOwner(deps, channel.id, aiFallbackFailText(built.reason, channel.title));
     }
     return;
   }
@@ -464,7 +495,7 @@ async function publishOneOffPost(
     { channelId: channel.id, externalId: post.externalId },
     "разовый пост опубликован",
   );
-  await notifyAdmin(deps, `✅ Разовый пост опубликован в ${channel.title}.`);
+  await notifyChannelOwner(deps, channel.id, `✅ Разовый пост опубликован в ${channel.title}.`);
 }
 
 /**
@@ -482,8 +513,9 @@ export async function publishDueOneOffPosts(deps: PostingDeps): Promise<void> {
         { err, channelId: post.channelId, externalId: post.externalId },
         "ошибка публикации разового поста",
       );
-      await notifyAdmin(
+      await notifyChannelOwner(
         deps,
+        post.channelId,
         `⚠️ Не удалось опубликовать разовый пост (#${String(post.externalId)}). Подробности в логах.`,
       );
     }
@@ -498,18 +530,21 @@ export function photoRefFromCache(photoUrl: string | null): PhotoRef | null {
 }
 
 /**
- * Шлёт админу превью одобрения (с фото, если подобрано) с кнопками. Устойчив к
- * ошибкам доставки — превью не должно «ронять» тик планировщика/обработчик меню.
+ * Шлёт владельцу канала превью одобрения (с фото, если подобрано) с кнопками
+ * (Шаг 14b-2: адресат — владелец, канал без владельца → супервладелец). Устойчив
+ * к ошибкам доставки — превью не должно «ронять» тик планировщика/обработчик меню.
  */
 export async function sendApprovalPreview(
   deps: PostingDeps,
+  channelId: string,
   caption: string,
   pendingId: string,
   photo: PhotoRef | null,
 ): Promise<void> {
+  const target = await channelNotifyTarget(deps, channelId);
   const keyboard = approvalKeyboard(pendingId);
   try {
-    await sendPost(deps, deps.adminId, caption, photo, keyboard);
+    await sendPost(deps, target, caption, photo, keyboard);
     return;
   } catch (err) {
     deps.logger.error({ err }, "не смог отправить превью одобрения — пробую простой текст");
@@ -517,11 +552,12 @@ export async function sendApprovalPreview(
   // Последний фолбэк: без фото и без Markdown, чтобы кнопки одобрения точно дошли
   // (даже если виноваты битое фото и/или кривая разметка поста).
   try {
-    await deps.api.sendMessage(deps.adminId, caption, { reply_markup: keyboard });
+    await deps.api.sendMessage(target, caption, { reply_markup: keyboard });
   } catch (err) {
     deps.logger.error({ err }, "не смог отправить даже текстовое превью одобрения");
-    await notifyAdmin(
+    await notifyChannelOwner(
       deps,
+      channelId,
       `⚠️ Не удалось прислать пост на одобрение (id ${pendingId}). Открой «📋 Меню → Одобрение», найди пост в списке и нажми «👀 Прислать превью с кнопками».`,
     );
   }
@@ -547,8 +583,8 @@ export interface ApprovalDraft {
 }
 
 /**
- * Ставит произвольный снимок поста в очередь одобрения и шлёт админу превью с
- * кнопками (общий путь; порт `request_approval`). Шаг 6a: пред-загружаем фото одним
+ * Ставит произвольный снимок поста в очередь одобрения и шлёт владельцу канала
+ * превью с кнопками (общий путь; порт `request_approval`). Шаг 6a: пред-загружаем фото одним
  * запросом к провайдеру и кэшируем в `PendingPost.photoUrl` — чтобы превью и
  * публикация взяли одну картинку. Шаг 10b: сюда сходятся плановый и AI-пост.
  */
@@ -568,7 +604,13 @@ export async function requestApprovalForDraft(
     pexelsQuery: draft.pexelsQuery,
     variantKey: draft.variantKey ?? null,
   });
-  await sendApprovalPreview(deps, buildApprovalCaption(draft, target), pending.id, photo);
+  await sendApprovalPreview(
+    deps,
+    channelId,
+    buildApprovalCaption(draft, target),
+    pending.id,
+    photo,
+  );
 }
 
 /**
@@ -676,9 +718,9 @@ export type PendingPreviewResult =
   | { ok: false; reason: "not_found" };
 
 /**
- * 10c: шлёт админу пост из очереди КАК В КАНАЛЕ — реальное фото, подпись без «шапки
- * одобрения» и настоящие кнопки поста. Отдельным сообщением: превью одобрения с его
- * кнопками остаётся на месте. Ничего не публикует и не трогает очередь.
+ * 10c: шлёт владельцу канала пост из очереди КАК В КАНАЛЕ — реальное фото, подпись
+ * без «шапки одобрения» и настоящие кнопки поста. Отдельным сообщением: превью
+ * одобрения с его кнопками остаётся на месте. Ничего не публикует и не трогает очередь.
  */
 export async function sendPendingPreview(
   deps: PostingDeps,
@@ -695,7 +737,7 @@ export async function sendPendingPreview(
   );
   await sendPost(
     deps,
-    deps.adminId,
+    await channelNotifyTarget(deps, pending.channelId),
     buildPostMessage(pending),
     photoRefFromCache(pending.photoUrl),
     keyboard,
@@ -704,7 +746,7 @@ export async function sendPendingPreview(
 }
 
 /**
- * Шлёт админу превью одобрения ЗАНОВО по id очереди (экран «📋 Одобрение» → карточка
+ * Шлёт владельцу канала превью одобрения ЗАНОВО по id очереди (экран «📋 Одобрение» → карточка
  * поста). Нужен, когда исходное превью потерялось: раньше до такого поста нельзя было
  * добраться вообще, а счётчик очереди его считал.
  *
@@ -723,6 +765,7 @@ export async function resendApprovalPreview(
   const channel = await getPostingChannelById(deps.prisma, pending.channelId);
   await sendApprovalPreview(
     deps,
+    pending.channelId,
     buildApprovalCaption(pending, channel?.chatId ?? null),
     pendingId,
     photoRefFromCache(pending.photoUrl),
@@ -736,7 +779,7 @@ export type PreviewNowResult =
   | { ok: false; reason: "no_channel" | "no_post" };
 
 /**
- * Шлёт админу превью на одобрение для КОНКРЕТНОГО поста контент-плана ВЫБРАННОГО
+ * Шлёт владельцу канала превью на одобрение для КОНКРЕТНОГО поста контент-плана ВЫБРАННОГО
  * канала (Шаг 8b; кнопка «👀 Прислать на тест» в экране поста). Не зависит от
  * тумблера одобрения. `no_post` = пост не найден (возможно, удалён).
  */

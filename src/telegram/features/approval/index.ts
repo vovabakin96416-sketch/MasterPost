@@ -22,22 +22,29 @@ import {
   updatePendingText,
 } from "../../../db/repositories/pendingPostRepository.js";
 import {
+  getOwnerTelegramIdByChannelId,
   getPostingChannelById,
 } from "../../../db/repositories/channelRepository.js";
 import { getPostPhotoSources } from "../../../db/repositories/postRepository.js";
 import { validateAnswer } from "../../../core/menu/validation.js";
+import { canActOnChannel } from "../../../core/approval/access.js";
 
 /**
  * Композер одобрения постов (Шаг 5 + фото Шаг 6a). Изолированный модуль: ловит
  * только кнопки превью (`ap:*`), правку текста и присланное фото, не задевая
  * меню/триггеры. Порт `approval_callback` + `receive_edit` + `receive_photo`.
  *
- * Чужие callback'и/текст/фото не «съедаем» — отдаём дальше через `next()`. Режимы
- * ввода (правка текста / своё фото) — in-memory Map по админу (как в меню).
+ * Шаг 14b-2 (мультитенант): вместо фильтра «только супервладелец» — проверка
+ * принадлежности поста: `ap:*` несёт id поста очереди, действовать над ним может
+ * ТОЛЬКО владелец его канала (канал без владельца → супервладелец). Режимы ввода
+ * (правка текста / своё фото) ключуются по нажавшему, а не по одному `adminId`.
+ *
+ * Чужие callback'и/текст/фото не «съедаем» — отдаём дальше через `next()`.
  */
 export interface ApprovalDeps {
   prisma: PrismaClient;
   logger: Logger;
+  // Супервладелец (`ADMIN_ID`) — фолбэк-адресат/решала для каналов без владельца.
   adminId: number;
   pexelsApiKey: string | undefined;
   anthropicApiKey: string | undefined;
@@ -46,28 +53,50 @@ export interface ApprovalDeps {
 
 export function createApprovalComposer(deps: ApprovalDeps): Composer<Context> {
   const composer = new Composer<Context>();
-  const { adminId } = deps;
 
-  // adminId → id поста: ждём новый текст (pendingEdit) либо новое фото (pendingPhoto).
+  // user id → id поста: ждём новый текст (pendingEdit) либо новое фото (pendingPhoto).
   const pendingEdit = new Map<number, string>();
   const pendingPhoto = new Map<number, string>();
 
-  const admin = composer.filter((ctx) => ctx.from?.id === adminId);
-
-  admin.on("callback_query:data", async (ctx, next) => {
+  composer.on("callback_query:data", async (ctx, next) => {
     const parsed = decodeApproval(ctx.callbackQuery.data);
     if (parsed === null) {
       await next(); // не наша кнопка — пусть ловит другой композер
       return;
     }
-    // Любое нажатие кнопки одобрения отменяет режимы ввода.
-    pendingEdit.delete(adminId);
-    pendingPhoto.delete(adminId);
-    await routeApproval(ctx, deps, { pendingEdit, pendingPhoto }, parsed.action, parsed.id);
+    const userId = ctx.from.id;
+    // Проверка принадлежности (14b-2): пост очереди → канал → владелец. Обработанный
+    // пост (null) пропускаем к роутеру — его ветки отвечают «уже обработан», ничего
+    // не раскрывая. Ответ «чужому» — тот же нейтральный текст, что и для пропавшего.
+    const pending = await getPending(deps.prisma, parsed.id);
+    if (pending !== null) {
+      const ownerTelegramId = await getOwnerTelegramIdByChannelId(
+        deps.prisma,
+        pending.channelId,
+      );
+      if (!canActOnChannel(userId, ownerTelegramId, deps.adminId)) {
+        await ctx.answerCallbackQuery({
+          text: "Пост уже обработан или не найден.",
+          show_alert: true,
+        });
+        return;
+      }
+    }
+    // Любое нажатие кнопки одобрения отменяет режимы ввода нажавшего.
+    pendingEdit.delete(userId);
+    pendingPhoto.delete(userId);
+    await routeApproval(
+      ctx,
+      deps,
+      { pendingEdit, pendingPhoto },
+      parsed.action,
+      parsed.id,
+      userId,
+    );
   });
 
-  admin.chatType("private").on("message:text", async (ctx, next) => {
-    const pendingId = pendingEdit.get(adminId);
+  composer.chatType("private").on("message:text", async (ctx, next) => {
+    const pendingId = pendingEdit.get(ctx.from.id);
     if (pendingId === undefined) {
       await next(); // правку не ждём — пусть текст обработает меню/комменты
       return;
@@ -76,16 +105,16 @@ export function createApprovalComposer(deps: ApprovalDeps): Composer<Context> {
       await next(); // команда — не текст правки
       return;
     }
-    await handleEdit(ctx, deps, pendingEdit, pendingId, ctx.message.text);
+    await handleEdit(ctx, deps, pendingEdit, ctx.from.id, pendingId, ctx.message.text);
   });
 
-  admin.chatType("private").on("message:photo", async (ctx, next) => {
-    const pendingId = pendingPhoto.get(adminId);
+  composer.chatType("private").on("message:photo", async (ctx, next) => {
+    const pendingId = pendingPhoto.get(ctx.from.id);
     if (pendingId === undefined) {
       await next(); // фото не ждём — не наше сообщение
       return;
     }
-    await handleOwnPhoto(ctx, deps, pendingPhoto, pendingId);
+    await handleOwnPhoto(ctx, deps, pendingPhoto, ctx.from.id, pendingId);
   });
 
   return composer;
@@ -119,13 +148,14 @@ async function currentTarget(
   return channel?.chatId ?? null;
 }
 
-/** Роутер кнопок превью одобрения. */
+/** Роутер кнопок превью одобрения. `userId` — нажавший (ключ режимов ввода). */
 async function routeApproval(
   ctx: Context,
   deps: ApprovalDeps,
   modes: InputModes,
   action: ApprovalAction,
   id: string,
+  userId: number,
 ): Promise<void> {
   switch (action) {
     case "pub": {
@@ -149,7 +179,7 @@ async function routeApproval(
         await ctx.answerCallbackQuery();
         return;
       }
-      modes.pendingEdit.set(deps.adminId, id);
+      modes.pendingEdit.set(userId, id);
       await ctx.reply("✍️ Пришли новый текст поста одним сообщением.");
       await ctx.answerCallbackQuery();
       return;
@@ -178,7 +208,7 @@ async function routeApproval(
         await ctx.answerCallbackQuery();
         return;
       }
-      modes.pendingPhoto.set(deps.adminId, id);
+      modes.pendingPhoto.set(userId, id);
       await ctx.reply("🖼 Пришли своё фото одним сообщением.");
       await ctx.answerCallbackQuery();
       return;
@@ -238,6 +268,7 @@ async function handleReroll(ctx: Context, deps: ApprovalDeps, id: string): Promi
   await editResolved(ctx, "🔄 Подобрано другое фото — новое превью ниже:");
   await sendApprovalPreview(
     postingDepsOf(ctx, deps),
+    updated.channelId,
     buildApprovalCaption(updated, await currentTarget(deps, updated.channelId)),
     id,
     photoRefFromCache(url),
@@ -250,9 +281,10 @@ async function handleOwnPhoto(
   ctx: Context,
   deps: ApprovalDeps,
   pendingPhoto: Map<number, string>,
+  userId: number,
   pendingId: string,
 ): Promise<void> {
-  pendingPhoto.delete(deps.adminId);
+  pendingPhoto.delete(userId);
   const photos = ctx.message?.photo ?? [];
   const fileId = photos[photos.length - 1]?.file_id;
   if (fileId === undefined) {
@@ -267,6 +299,7 @@ async function handleOwnPhoto(
   await ctx.reply("🖼 Фото обновлено — вот новое превью:");
   await sendApprovalPreview(
     postingDepsOf(ctx, deps),
+    updated.channelId,
     buildApprovalCaption(updated, await currentTarget(deps, updated.channelId)),
     pendingId,
     photoRefFromCache(fileId),
@@ -278,6 +311,7 @@ async function handleEdit(
   ctx: Context,
   deps: ApprovalDeps,
   pendingEdit: Map<number, string>,
+  userId: number,
   pendingId: string,
   text: string,
 ): Promise<void> {
@@ -287,7 +321,7 @@ async function handleEdit(
     return; // остаёмся в режиме правки
   }
   const updated = await updatePendingText(deps.prisma, pendingId, result.value);
-  pendingEdit.delete(deps.adminId);
+  pendingEdit.delete(userId);
   if (updated === null) {
     await ctx.reply("Пост не найден — возможно, уже обработан.");
     return;
@@ -295,6 +329,7 @@ async function handleEdit(
   await ctx.reply("✍️ Текст обновлён — вот новое превью:");
   await sendApprovalPreview(
     postingDepsOf(ctx, deps),
+    updated.channelId,
     buildApprovalCaption(updated, await currentTarget(deps, updated.channelId)),
     updated.id,
     photoRefFromCache(updated.photoUrl),

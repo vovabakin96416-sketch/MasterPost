@@ -28,7 +28,11 @@ import {
   type PostingDeps,
   type PreviewNowResult,
 } from "../../../services/postingService.js";
-import { deletePending } from "../../../db/repositories/pendingPostRepository.js";
+import {
+  deletePending,
+  getPending,
+} from "../../../db/repositories/pendingPostRepository.js";
+import { canActOnChannel } from "../../../core/approval/access.js";
 import {
   requestAiPostApproval,
   type AiPostApprovalDeps,
@@ -69,6 +73,7 @@ import {
   addTrigger,
   createChannel,
   ensureCampaignStart,
+  getOwnerTelegramIdByChannelId,
   removeTrigger,
   setChannelActive,
   setChatId,
@@ -691,7 +696,8 @@ async function routeCallback(
       };
       const result = await requestAiPostApproval(aiDeps, channel.id);
       if (!result.ok) {
-        await ctx.api.sendMessage(deps.adminId, aiPostResultText(result));
+        // 14b-2: сообщение об ошибке генерации — нажавшему, а не супервладельцу.
+        await ctx.api.sendMessage(deps.viewer.userId, aiPostResultText(result));
       }
       return;
     }
@@ -766,10 +772,19 @@ async function routeCallback(
 
     // Карточка поста из очереди: `api:<cuid>` — id строковый, не индекс (список
     // меняется между рендерами, а cuid ~25 символов и в лимит 64 байта влезает).
+    // 14b-2: id из callback-data → перед действием проверяем принадлежность поста
+    // каналу пользователя (крафтнутый callback до чужого поста не дотягивается).
     case "api": {
       const id = args[0];
       if (id === undefined || id === "") {
         await ctx.answerCallbackQuery();
+        return;
+      }
+      if (!(await pendingAccessible(deps, id))) {
+        await ctx.answerCallbackQuery({
+          text: "Пост уже обработан или не найден.",
+          show_alert: true,
+        });
         return;
       }
       await editScreen(ctx, await renderPendingItem(deps, id));
@@ -781,6 +796,13 @@ async function routeCallback(
       const id = args[0];
       if (id === undefined || id === "") {
         await ctx.answerCallbackQuery();
+        return;
+      }
+      if (!(await pendingAccessible(deps, id))) {
+        await ctx.answerCallbackQuery({
+          text: "Пост уже обработан или не найден.",
+          show_alert: true,
+        });
         return;
       }
       const result = await resendApprovalPreview(postingDepsOf(ctx, deps), id);
@@ -796,6 +818,13 @@ async function routeCallback(
       const id = args[0];
       if (id === undefined || id === "") {
         await ctx.answerCallbackQuery();
+        return;
+      }
+      if (!(await pendingAccessible(deps, id))) {
+        await ctx.answerCallbackQuery({
+          text: "Пост уже обработан или не найден.",
+          show_alert: true,
+        });
         return;
       }
       await deletePending(deps.prisma, id);
@@ -1432,30 +1461,45 @@ async function routeCallback(
       return;
 
     case "anwarn":
+      // Тест-кнопка: напоминание шлём нажавшему (14b-2), а не супервладельцу.
       await sendContentEndingNotice({
         prisma: deps.prisma,
         logger: deps.logger,
         api: ctx.api,
-        adminId: deps.adminId,
+        adminId: deps.viewer.userId,
       });
       await ctx.answerCallbackQuery({
         text: "📨 Напоминание отправлено — проверь сообщение от бота ☝️",
       });
       return;
 
-    case "anrep":
+    case "anrep": {
+      // 14b-2: отчёт — по ВЫБРАННОМУ каналу пользователя и нажавшему (раньше сервис
+      // брал первый канал в БД и слал супервладельцу — тестер получил бы чужой отчёт).
+      const channel = await resolveSelectedChannel(deps);
+      if (channel === null) {
+        await ctx.answerCallbackQuery({
+          text: "Сначала выбери канал в «📡 Каналы».",
+          show_alert: true,
+        });
+        return;
+      }
       await ctx.answerCallbackQuery({ text: "Собираю отчёт… ⏳" });
-      await sendWeeklyReportNow({
-        prisma: deps.prisma,
-        logger: deps.logger,
-        api: ctx.api,
-        adminId: deps.adminId,
-        mtproto: deps.mtproto,
-        anthropicApiKey: deps.anthropicApiKey,
-        timeoutMs: deps.timeoutMs,
-        telemetrApiKey: deps.telemetrApiKey,
-      });
+      await sendWeeklyReportNow(
+        {
+          prisma: deps.prisma,
+          logger: deps.logger,
+          api: ctx.api,
+          adminId: deps.viewer.userId,
+          mtproto: deps.mtproto,
+          anthropicApiKey: deps.anthropicApiKey,
+          timeoutMs: deps.timeoutMs,
+          telemetrApiKey: deps.telemetrApiKey,
+        },
+        channel.id,
+      );
       return;
+    }
 
     case "soon":
       await ctx.answerCallbackQuery({ text: "Скоро 🛠" });
@@ -1956,6 +2000,24 @@ function applyWinnerToast(result: ApplyResult): string {
     case "auto_off":
       return "Авто-применение выключено";
   }
+}
+
+/**
+ * Доступен ли пост очереди пользователю меню (Шаг 14b-2): пост → канал → владелец;
+ * канал без владельца решает супервладелец. id приходит в callback-data, поэтому без
+ * проверки крафтнутый callback дотянулся бы до чужого поста (`api`/`apre`/`apdel`).
+ * Обработанный пост (null) пропускаем — экраны сами отвечают «не найден».
+ */
+async function pendingAccessible(deps: AdminDeps, pendingId: string): Promise<boolean> {
+  const pending = await getPending(deps.prisma, pendingId);
+  if (pending === null) {
+    return true;
+  }
+  const ownerTelegramId = await getOwnerTelegramIdByChannelId(
+    deps.prisma,
+    pending.channelId,
+  );
+  return canActOnChannel(deps.viewer.userId, ownerTelegramId, deps.adminId);
 }
 
 /** Зависимости публикации из контекста апдейта (`api` берём из ctx, как в approval). */

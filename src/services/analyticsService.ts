@@ -2,9 +2,11 @@ import { type Api, GrammyError } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../db/client.js";
 import {
+  getOwnerTelegramIdByChannelId,
   getPostingChannel,
   type PostingChannel,
 } from "../db/repositories/channelRepository.js";
+import { resolveOwnerTarget } from "../core/approval/access.js";
 import { localDateParts } from "../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../core/schedule/resolveCampaignDay.js";
 import { shouldWarnContentEnding } from "../core/analytics/contentEnding.js";
@@ -18,7 +20,11 @@ import { shouldWarnContentEnding } from "../core/analytics/contentEnding.js";
  * и из планировщика (по расписанию), и из меню («прислать сейчас»).
  */
 
-/** Зависимости аналитики: БД, логгер, Telegram API, id админа. */
+/**
+ * Зависимости аналитики: БД, логгер, Telegram API, адресат по умолчанию.
+ * Шаг 14b-2: `adminId` — фолбэк (канал без владельца / глобальные сообщения);
+ * канальные уведомления адресуются владельцу канала (`ownerTargetOf`).
+ */
 export interface AnalyticsDeps {
   prisma: PrismaClient;
   logger: Logger;
@@ -49,22 +55,51 @@ export function campaignWeekOf(
   return resolveCampaignDay(today, start).week;
 }
 
-/** Отправляет админу текст с откатом Markdown; ошибку доставки только логируем. */
-export async function sendToAdmin(deps: AnalyticsDeps, text: string): Promise<void> {
+/** Отправляет пользователю текст с откатом Markdown; ошибку доставки только логируем. */
+export async function sendToUser(
+  deps: AnalyticsDeps,
+  userId: number,
+  text: string,
+): Promise<void> {
   try {
-    await deps.api.sendMessage(deps.adminId, text, { parse_mode: "Markdown" });
+    await deps.api.sendMessage(userId, text, { parse_mode: "Markdown" });
   } catch (err) {
     if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
-      await deps.api.sendMessage(deps.adminId, text);
+      await deps.api.sendMessage(userId, text);
       return;
     }
-    deps.logger.error({ err }, "не смог отправить напоминание админу");
+    deps.logger.error({ err }, "не смог отправить напоминание владельцу");
+  }
+}
+
+/** Отправляет адресату по умолчанию (`deps.adminId`) — для неканальных сообщений. */
+export async function sendToAdmin(deps: AnalyticsDeps, text: string): Promise<void> {
+  await sendToUser(deps, deps.adminId, text);
+}
+
+/**
+ * Telegram-адресат уведомлений канала (Шаг 14b-2): владелец канала, без владельца —
+ * `deps.adminId`. Сбой чтения не роняет вызвавшего — уйдёт адресату по умолчанию.
+ */
+export async function ownerTargetOf(
+  deps: AnalyticsDeps,
+  channelId: string,
+): Promise<number> {
+  try {
+    const ownerTelegramId = await getOwnerTelegramIdByChannelId(deps.prisma, channelId);
+    return resolveOwnerTarget(ownerTelegramId, deps.adminId);
+  } catch (err) {
+    deps.logger.warn(
+      { err, channelId },
+      "не смог определить владельца канала — уведомляю адресата по умолчанию",
+    );
+    return deps.adminId;
   }
 }
 
 /**
  * Тик планировщика (ВС 21:00 МСК): если идёт последняя неделя плана — напомнить
- * владельцу залить новый месяц контента. Иначе — тихо. Порт `check_content_ending`.
+ * владельца КАНАЛА залить новый месяц контента. Иначе — тихо. Порт `check_content_ending`.
  */
 export async function runContentEndingCheck(deps: AnalyticsDeps): Promise<void> {
   const channel = await getPostingChannel(deps.prisma);
@@ -72,7 +107,7 @@ export async function runContentEndingCheck(deps: AnalyticsDeps): Promise<void> 
     return;
   }
   if (shouldWarnContentEnding(campaignWeekOf(channel))) {
-    await sendToAdmin(deps, CONTENT_ENDING_TEXT);
+    await sendToUser(deps, await ownerTargetOf(deps, channel.id), CONTENT_ENDING_TEXT);
     deps.logger.info("отправлено напоминание о конце контента");
   }
 }

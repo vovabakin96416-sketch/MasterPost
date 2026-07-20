@@ -440,6 +440,23 @@ export async function getOwnerTelegramIdByChatId(
   return row?.owner?.telegramUserId ?? null;
 }
 
+/**
+ * Telegram user id владельца канала по id канала, или `null` (канал не найден
+ * либо без владельца). Шаг 14b-2: превью одобрения и служебные уведомления
+ * рантайма (нет постов, AI-подхват упал, разовый пост и т.п.) идут владельцу
+ * КАНАЛА; без владельца адресат — супервладелец (`resolveOwnerTarget`).
+ */
+export async function getOwnerTelegramIdByChannelId(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<string | null> {
+  const row = await prisma.channel.findUnique({
+    where: { id: channelId },
+    select: { owner: { select: { telegramUserId: true } } },
+  });
+  return row?.owner?.telegramUserId ?? null;
+}
+
 /** Включает/выключает канал (Шаг 8a). Неактивный канал рантайм не ведёт. */
 export async function setChannelActive(
   prisma: PrismaClient,

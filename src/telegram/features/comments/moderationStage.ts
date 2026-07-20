@@ -7,7 +7,11 @@ import { shouldCheckToxicity } from "../../../core/moderation/buildToxicityPromp
 import { buildPostLink } from "../../../core/analytics/postLink.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
 import { resolveCommentChannel } from "./routing.js";
-import { getReplyChannelById } from "../../../db/repositories/channelRepository.js";
+import { resolveOwnerTarget } from "../../../core/approval/access.js";
+import {
+  getOwnerTelegramIdByChannelId,
+  getReplyChannelById,
+} from "../../../db/repositories/channelRepository.js";
 import { tryConsumeDailyBudget } from "../../../services/ai/aiBudget.js";
 import {
   getModerationDelete,
@@ -63,18 +67,35 @@ export function createModerationStage(): CommentStage {
         return "pass";
       }
 
-      // Привилегированный отправитель — бот/аноним/канал (автопересылка) или владелец.
-      const isPrivileged = from.is_bot === true || from.id === deps.adminId;
+      // Шаг 14b-2: адресат сигнала — владелец КАНАЛА, без владельца — супервладелец.
+      const ownerTelegramId = await getOwnerTelegramIdByChannelId(
+        deps.prisma,
+        channelId,
+      );
+      const notifyTarget = resolveOwnerTarget(ownerTelegramId, deps.adminId);
+
+      // Привилегированный отправитель — бот/аноним/канал (автопересылка), владелец
+      // канала или супервладелец (он ведёт каналы без владельца и чинит чужие).
+      const isPrivileged =
+        from.is_bot === true ||
+        from.id === notifyTarget ||
+        from.id === deps.adminId;
 
       // Слой 1 (11d): дешёвые эвристики, 0 токенов.
       const stopWords = await getStopWords(deps.prisma, channelId);
       const verdict = detectSpam({ text, isPrivileged, stopWords });
       if (verdict.spam) {
-        return enforce(ctx, deps, channelId, REASON_LABEL[verdict.reason]);
+        return enforce(
+          ctx,
+          deps,
+          channelId,
+          REASON_LABEL[verdict.reason],
+          notifyTarget,
+        );
       }
 
       // Слой 2 (11e): семантическая токсичность через Haiku. Ворота дёшево→дорого.
-      return checkToxicity(ctx, deps, channelId, text, isPrivileged);
+      return checkToxicity(ctx, deps, channelId, text, isPrivileged, notifyTarget);
     },
   };
 }
@@ -90,6 +111,7 @@ async function checkToxicity(
   channelId: string,
   text: string,
   isPrivileged: boolean,
+  notifyTarget: number,
 ): Promise<"handled" | "pass"> {
   if (isPrivileged) {
     return "pass";
@@ -132,7 +154,13 @@ async function checkToxicity(
   if (result === null || !result.toxic) {
     return "pass";
   }
-  return enforce(ctx, deps, channelId, `токсичность: ${result.reason}`);
+  return enforce(
+    ctx,
+    deps,
+    channelId,
+    `токсичность: ${result.reason}`,
+    notifyTarget,
+  );
 }
 
 /**
@@ -145,12 +173,13 @@ async function enforce(
   deps: CommentDeps,
   channelId: string,
   reasonLabel: string,
+  notifyTarget: number,
 ): Promise<"handled" | "pass"> {
   let deleted = false;
   if (await getModerationDelete(deps.prisma, channelId)) {
     deleted = await tryDelete(ctx, deps);
   }
-  await notifyAdmin(ctx, deps, reasonLabel, deleted);
+  await notifyOwner(ctx, deps, reasonLabel, deleted, notifyTarget);
   return deleted ? "handled" : "pass";
 }
 
@@ -187,12 +216,16 @@ function buildCommentLink(ctx: Context): string | null {
   return buildPostLink({ username: null, chatId: String(chatId) }, messageId);
 }
 
-/** Шлёт сигнал админу о нарушении. Ошибка разметки → ретрай без Markdown (как sendToAdmin). */
-async function notifyAdmin(
+/**
+ * Шлёт сигнал о нарушении владельцу канала (Шаг 14b-2; `notifyTarget` уже разрешён
+ * через `resolveOwnerTarget`). Ошибка разметки → ретрай без Markdown (как sendToAdmin).
+ */
+async function notifyOwner(
   ctx: Context,
   deps: CommentDeps,
   reasonLabel: string,
   deleted: boolean,
+  notifyTarget: number,
 ): Promise<void> {
   const from = ctx.from;
   const author =
@@ -212,12 +245,12 @@ async function notifyAdmin(
     (link !== null ? `Коммент: ${link}\n` : "") +
     `\n${snippet}`;
   try {
-    await ctx.api.sendMessage(deps.adminId, text, { parse_mode: "Markdown" });
+    await ctx.api.sendMessage(notifyTarget, text, { parse_mode: "Markdown" });
   } catch (err) {
     if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
-      await ctx.api.sendMessage(deps.adminId, text);
+      await ctx.api.sendMessage(notifyTarget, text);
       return;
     }
-    deps.logger.error({ err }, "модерация: не смог отправить сигнал админу");
+    deps.logger.error({ err }, "модерация: не смог отправить сигнал владельцу");
   }
 }
