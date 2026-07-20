@@ -95,8 +95,10 @@ describe("evaluateChannelRights", () => {
   });
 });
 
-describe("композер онбординга: регистрирует канал только от владельца", () => {
-  const ADMIN_ID = 42;
+describe("композер онбординга: регистрирует канал только от зарегистрированного владельца", () => {
+  // Гейт 14b-1: доступ по таблице Owner, а не по единственному ADMIN_ID.
+  const OWNER_TG_ID = 42;
+  const OWNER_ROW_ID = "own1";
 
   const silentLogger = {
     warn: () => undefined,
@@ -130,13 +132,24 @@ describe("композер онбординга: регистрирует кан
     create: ReturnType<typeof vi.fn>;
     sendMessage: ReturnType<typeof vi.fn>;
   }> {
+    // Owner в реестре один — OWNER_TG_ID; остальные не зарегистрированы.
+    const ownerFindUnique = vi.fn().mockImplementation(
+      ({ where }: { where: { telegramUserId: string } }) =>
+        Promise.resolve(
+          where.telegramUserId === String(OWNER_TG_ID)
+            ? { id: OWNER_ROW_ID, telegramUserId: where.telegramUserId, name: null }
+            : null,
+        ),
+    );
     const findFirst = vi.fn().mockResolvedValue(null);
     const create = vi.fn().mockResolvedValue({ id: "c1" });
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const composer = createOnboardingComposer({
-      prisma: { channel: { findFirst, create } } as never,
+      prisma: {
+        owner: { findUnique: ownerFindUnique },
+        channel: { findFirst, create },
+      } as never,
       logger: silentLogger,
-      adminId: ADMIN_ID,
     });
     const ctx = new Context(
       promotedUpdate(fromId),
@@ -147,15 +160,17 @@ describe("композер онбординга: регистрирует кан
     return { findFirst, create, sendMessage };
   }
 
-  it("владелец добавил бота → канал зарегистрирован, владельцу ушёл DM", async () => {
-    const { create, sendMessage } = await run(ADMIN_ID);
+  it("зарегистрированный владелец добавил бота → канал со штампом владельца, ему ушёл DM", async () => {
+    const { create, sendMessage } = await run(OWNER_TG_ID);
     expect(create).toHaveBeenCalledTimes(1);
+    const createArgs = create.mock.calls[0][0] as { data: { ownerId: string } };
+    expect(createArgs.data.ownerId).toBe(OWNER_ROW_ID);
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0][0]).toBe(ADMIN_ID);
+    expect(sendMessage.mock.calls[0][0]).toBe(OWNER_TG_ID);
     expect(String(sendMessage.mock.calls[0][1])).toContain("подключён");
   });
 
-  it("чужой человек добавил бота → игнор: ни записи в БД, ни DM", async () => {
+  it("незарегистрированный человек добавил бота → игнор: ни записи в БД, ни DM", async () => {
     const { findFirst, create, sendMessage } = await run(777);
     expect(findFirst).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();

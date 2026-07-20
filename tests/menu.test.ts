@@ -10,9 +10,11 @@ import { paginate } from "../src/core/menu/paginate";
 import {
   MAX_ANSWER_LENGTH,
   MAX_DAILY_CAP,
+  MAX_OWNER_NAME_LENGTH,
   POST_FIELD_LIMITS,
   validateAnswer,
   validateDailyCap,
+  validateOwnerInvite,
   validatePostField,
   validateTriggerWord,
 } from "../src/core/menu/validation";
@@ -194,5 +196,41 @@ describe("validateDailyCap (дневной лимит AI-вызовов)", () =>
     expect(validateDailyCap("-5").ok).toBe(false);
     expect(validateDailyCap("1.5").ok).toBe(false);
     expect(validateDailyCap(String(MAX_DAILY_CAP + 1)).ok).toBe(false);
+  });
+});
+
+describe("validateOwnerInvite (приглашение владельца, Шаг 14b-1)", () => {
+  it("голый id → owner без имени", () => {
+    expect(validateOwnerInvite(" 123456789 ")).toEqual({
+      ok: true,
+      value: { telegramUserId: 123456789, name: null },
+    });
+  });
+
+  it("id + имя (в т.ч. из нескольких слов) → имя сохраняется", () => {
+    expect(validateOwnerInvite("123456789 Анна")).toEqual({
+      ok: true,
+      value: { telegramUserId: 123456789, name: "Анна" },
+    });
+    expect(validateOwnerInvite("42 Анна Тестер")).toEqual({
+      ok: true,
+      value: { telegramUserId: 42, name: "Анна Тестер" },
+    });
+  });
+
+  it("не число / пусто / ноль / имя впереди → ошибка", () => {
+    expect(validateOwnerInvite("").ok).toBe(false);
+    expect(validateOwnerInvite("abc").ok).toBe(false);
+    expect(validateOwnerInvite("0").ok).toBe(false);
+    expect(validateOwnerInvite("-5").ok).toBe(false);
+    expect(validateOwnerInvite("Анна 123456789").ok).toBe(false);
+    expect(validateOwnerInvite("@username").ok).toBe(false);
+  });
+
+  it("слишком длинный id или имя → ошибка", () => {
+    expect(validateOwnerInvite("1".repeat(16)).ok).toBe(false);
+    expect(
+      validateOwnerInvite(`123 ${"а".repeat(MAX_OWNER_NAME_LENGTH + 1)}`).ok,
+    ).toBe(false);
   });
 });

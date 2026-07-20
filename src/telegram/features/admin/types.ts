@@ -11,10 +11,25 @@ import type { Button, Choice } from "../../../core/content/postSchema.js";
  * и доступом только администратору (`adminId`).
  */
 
-/** Зависимости меню: БД, логгер, id админа, ключ Pexels (фото), ключ Anthropic (AI-пост) и статус MTProto. */
-export interface AdminDeps {
+/**
+ * Текущий пользователь меню (Шаг 14b-1, мультитенант). До 14b меню было закрыто
+ * единственным `ADMIN_ID`; теперь его открывает любой зарегистрированный владелец
+ * (строка в `Owner`), и все экраны работают ТОЛЬКО с его каналами.
+ */
+export interface MenuViewer {
+  /** Telegram user id — ключ эфемерных состояний (pending/drafts/выбранный канал). */
+  readonly userId: number;
+  /** id строки `Owner` — скоуп каналов (`listChannelsByOwner`). */
+  readonly ownerId: string;
+}
+
+/** Зависимости меню на старте бота: БД, логгер, id супервладельца, ключи API и статус MTProto. */
+export interface AdminBotDeps {
   prisma: PrismaClient;
   logger: Logger;
+  // Супервладелец (`ADMIN_ID`). После 14b-1 это НЕ гейт меню (гейт — таблица `Owner`),
+  // а адресат превью одобрения и владелец служебных экранов («➕ Пригласить владельца»).
+  // Разграничение одобрения по владельцу канала — 14b-2.
   adminId: number;
   pexelsApiKey: string | undefined;
   // Шаг 10b: ключ Anthropic для кнопки «🤖 AI-пост». undefined → генерация отключена
@@ -28,6 +43,15 @@ export interface AdminDeps {
   // Шаг 7b: только для строки статуса в «📊 Аналитика». Это ЧИСТЫЙ конфиг (без GramJS) —
   // меню не тянет тяжёлый mtprotoClient в импорт-граф запущенного бота.
   mtproto: MtprotoConfig;
+}
+
+/**
+ * Зависимости одного апдейта меню: то же + личность пользователя, прошедшего гейт.
+ * Собираются композером на каждый апдейт (`{ ...deps, viewer }`) — рендереры экранов
+ * и резолверы каналов читают `viewer`, не зная, откуда он взялся.
+ */
+export interface AdminDeps extends AdminBotDeps {
+  viewer: MenuViewer;
 }
 
 /**
@@ -62,6 +86,8 @@ export type PendingInput =
   | { readonly kind: "setToxicityPolicy" }
   // Шаг 12g — вет: ссылка/@username чужого канала для проверки перед закупкой рекламы.
   | { readonly kind: "vetChannel" }
+  // Шаг 14b-1 — приглашение владельца (только супервладелец): Telegram user id + опц. имя.
+  | { readonly kind: "inviteOwner" }
   | {
       readonly kind: "editPostField";
       readonly field: "title" | "text" | "cta";

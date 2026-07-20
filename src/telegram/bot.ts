@@ -7,6 +7,7 @@ import {
 import { createApprovalComposer } from "./features/approval/index.js";
 import { createPostButtonsComposer } from "./features/postButtons/index.js";
 import { createOnboardingComposer } from "./features/onboarding/index.js";
+import { findOwnerByTelegramId } from "../db/repositories/ownerRepository.js";
 import type { CommentDeps } from "./features/comments/types.js";
 import type { MtprotoConfig } from "../services/analytics/mtprotoConfig.js";
 
@@ -31,8 +32,13 @@ export function createBot(token: string, deps: BotDeps): Bot {
   const bot = new Bot(token);
 
   bot.command("start", async (ctx) => {
-    // Админу сразу даём постоянную кнопку «📋 Меню» под полем ввода (один раз — держится).
-    if (ctx.from?.id === deps.adminId) {
+    // Зарегистрированному владельцу (гейт 14b-1 — таблица `Owner`, супервладелец
+    // заведён на старте) сразу даём постоянную кнопку «📋 Меню» под полем ввода.
+    const owner =
+      ctx.from === undefined
+        ? null
+        : await findOwnerByTelegramId(deps.prisma, ctx.from.id);
+    if (owner !== null) {
       await ctx.reply(
         "Привет! Я MasterPost — бот-управитель каналов.\nВнизу кнопка «📋 Меню» — нажми, чтобы открыть управление.",
         { reply_markup: buildMenuReplyKeyboard() },

@@ -204,6 +204,50 @@ export function validateDateTime(
   return { ok: true, value: dt };
 }
 
+/** Максимальная длина имени приглашаемого владельца (Шаг 14b-1). */
+export const MAX_OWNER_NAME_LENGTH = 100;
+
+/** Результат валидации приглашения владельца: Telegram user id + опциональное имя. */
+export type OwnerInviteValidationResult =
+  | {
+      readonly ok: true;
+      readonly value: { readonly telegramUserId: number; readonly name: string | null };
+    }
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * Проверяет ввод приглашения владельца (Шаг 14b-1): `<Telegram user id>` или
+ * `<id> <имя>`. Id — положительное целое (до 15 цифр — с запасом к текущим id
+ * Telegram, влезает в double без потери точности); имя — остаток строки.
+ */
+export function validateOwnerInvite(input: string): OwnerInviteValidationResult {
+  const trimmed = input.trim();
+  const match = /^(\d{1,15})(?:\s+(.+))?$/.exec(trimmed);
+  if (match?.[1] === undefined) {
+    return {
+      ok: false,
+      error:
+        "Нужен Telegram user id числом, можно с именем: «123456789 Анна». " +
+        "Id виден в @userinfobot, когда человек пишет ему /start.",
+    };
+  }
+  const telegramUserId = Number(match[1]);
+  if (telegramUserId === 0) {
+    return { ok: false, error: "Id не может быть нулём — пришли настоящий Telegram user id." };
+  }
+  const rawName = match[2]?.trim() ?? "";
+  if (rawName.length > MAX_OWNER_NAME_LENGTH) {
+    return {
+      ok: false,
+      error: `Слишком длинное имя (${String(rawName.length)} символов, лимит ${String(MAX_OWNER_NAME_LENGTH)}).`,
+    };
+  }
+  return {
+    ok: true,
+    value: { telegramUserId, name: rawName === "" ? null : rawName },
+  };
+}
+
 /**
  * Проверяет адрес канала публикации (Доработка 4.1): принимает `@username`,
  * ссылку `t.me/...`, голый `username` или числовой id канала (`-100…`).

@@ -10,6 +10,7 @@ import {
   validateCooldownHours,
   validateDailyCap,
   validateDateTime,
+  validateOwnerInvite,
   validatePostField,
   validateTime,
   validateTriggerWord,
@@ -74,10 +75,12 @@ import {
 } from "../../../db/repositories/channelRepository.js";
 import {
   resolveChannelMenu,
+  resolveMenuViewer,
   resolvePostingChannelSelected,
   resolveSelectedChannel,
   setSelectedChannel,
 } from "./channelContext.js";
+import { ensureOwner } from "../../../db/repositories/ownerRepository.js";
 import {
   addText,
   getTextPool,
@@ -95,6 +98,7 @@ import { toggleBooleanSetting } from "../../../db/repositories/settingRepository
 import {
   renderAddAnswerPrompt,
   renderAddChannelPrompt,
+  renderInviteOwnerPrompt,
   renderChannels,
   renderChannelDetail,
   renderRightsCheck,
@@ -146,7 +150,13 @@ import {
   renderNewPostPhoto,
   renderNewPostPreview,
 } from "./screens.js";
-import type { AdminDeps, NewPostDraft, PendingInput, Screen } from "./types.js";
+import type {
+  AdminBotDeps,
+  AdminDeps,
+  NewPostDraft,
+  PendingInput,
+  Screen,
+} from "./types.js";
 import { createTelemetrProvider } from "../../../services/market/telemetrProvider.js";
 import { vetChannel } from "../../../services/market/channelVettingService.js";
 
@@ -162,61 +172,87 @@ export function buildMenuReplyKeyboard(): Keyboard {
 }
 
 /**
- * Композер меню админа (Шаг 3). Изолированный модуль: правка меню не задевает
+ * Композер меню (Шаг 3). Изолированный модуль: правка меню не задевает
  * триггеры/комментарии. Порт `cmd_menu` / `button_handler` Python-бота.
  *
- * Доступ: `/menu` отвечает вежливым отказом не-админу; все callback'и и текстовый
- * ввод обрабатываются только для `adminId`. Режим ожидания ввода (добавить/изменить
- * слово или ответ) держим в in-memory Map — порт `ConversationHandler`.
+ * Доступ (Шаг 14b-1, мультитенант): гейт — таблица `Owner`, а не `ADMIN_ID`.
+ * `/menu`, callback'и и ожидаемый ввод обрабатываются для любого зарегистрированного
+ * владельца; каждый видит только свои каналы (`resolveChannelMenu` скоуплен по
+ * `viewer.ownerId`). Незарегистрированным — вежливый отказ. Режимы ожидания ввода
+ * (in-memory Map, порт `ConversationHandler`) ключуются по Telegram user id.
  */
-export function createAdminComposer(deps: AdminDeps): Composer<Context> {
+export function createAdminComposer(deps: AdminBotDeps): Composer<Context> {
   const composer = new Composer<Context>();
-  const { adminId } = deps;
 
-  // Состояние «жду текст» по пользователю (один админ, один процесс).
+  // Состояние «жду текст» по пользователю (несколько владельцев, один процесс).
   const pending = new Map<number, PendingInput>();
 
   // Черновики мастера «Новый пост» (Шаг 6c) — копятся между шагами, эфемерны.
   const newPostDrafts = new Map<number, NewPostDraft>();
 
-  // /menu — единственная точка входа. Не-админу — вежливый отказ.
+  // /menu — единственная точка входа. Не-владельцу — вежливый отказ.
   composer.command("menu", async (ctx) => {
-    if (ctx.from?.id !== adminId) {
-      await ctx.reply("Команда только для администратора.");
+    const userId = ctx.from?.id;
+    if (userId === undefined) {
       return;
     }
-    pending.delete(adminId);
-    await sendScreen(ctx, await renderMain(deps));
+    const viewer = await resolveMenuViewer(deps.prisma, userId);
+    if (viewer === null) {
+      await ctx.reply(MENU_DENIED_TEXT);
+      return;
+    }
+    pending.delete(userId);
+    await sendScreen(ctx, await renderMain({ ...deps, viewer }));
   });
 
-  // Всё остальное меню — только админ.
-  const admin = composer.filter((ctx) => ctx.from?.id === adminId);
-
-  admin.on("callback_query:data", async (ctx, next) => {
+  // Кнопки меню: сначала дёшево разбираем callback (чужие отдаём дальше без похода
+  // в БД), затем гейт по `Owner` — незарегистрированному отвечаем тостом.
+  composer.on("callback_query:data", async (ctx, next) => {
     const parsed = decodeCb(ctx.callbackQuery.data);
     if (parsed === null) {
       await next(); // не кнопка меню (напр. `ap:*` одобрения) — отдаём дальше
       return;
     }
-    // Любое нажатие кнопки отменяет режим ожидания ввода.
-    pending.delete(adminId);
-    // Выход из мастера «Новый пост» (кнопка не из мастера) — сбрасываем черновик.
-    if (!parsed.action.startsWith("np")) {
-      newPostDrafts.delete(adminId);
-    }
-    await routeCallback(ctx, deps, pending, newPostDrafts, parsed.action, parsed.args);
-  });
-
-  // Текстовый ввод в личке — только когда ждём его (иначе отдаём дальше).
-  admin.chatType("private").on("message:text", async (ctx, next) => {
-    // Нажатие постоянной кнопки «📋 Меню» = открыть меню (как /menu), отменив ввод.
-    if (ctx.message.text === MENU_BUTTON_TEXT) {
-      pending.delete(adminId);
-      newPostDrafts.delete(adminId);
-      await sendScreen(ctx, await renderMain(deps));
+    const userId = ctx.callbackQuery.from.id;
+    const viewer = await resolveMenuViewer(deps.prisma, userId);
+    if (viewer === null) {
+      await ctx.answerCallbackQuery({ text: MENU_DENIED_TEXT, show_alert: true });
       return;
     }
-    const state = pending.get(adminId);
+    // Любое нажатие кнопки отменяет режим ожидания ввода.
+    pending.delete(userId);
+    // Выход из мастера «Новый пост» (кнопка не из мастера) — сбрасываем черновик.
+    if (!parsed.action.startsWith("np")) {
+      newPostDrafts.delete(userId);
+    }
+    await routeCallback(
+      ctx,
+      { ...deps, viewer },
+      pending,
+      newPostDrafts,
+      parsed.action,
+      parsed.args,
+    );
+  });
+
+  // Текстовый ввод в личке — только когда ждём его (иначе отдаём дальше). Чужие
+  // сообщения уходят по `next()` без похода в БД: запись в `pending` появляется
+  // только после гейта.
+  composer.chatType("private").on("message:text", async (ctx, next) => {
+    const userId = ctx.from.id;
+    // Нажатие постоянной кнопки «📋 Меню» = открыть меню (как /menu), отменив ввод.
+    if (ctx.message.text === MENU_BUTTON_TEXT) {
+      const viewer = await resolveMenuViewer(deps.prisma, userId);
+      if (viewer === null) {
+        await next(); // не владелец — для него это просто текст
+        return;
+      }
+      pending.delete(userId);
+      newPostDrafts.delete(userId);
+      await sendScreen(ctx, await renderMain({ ...deps, viewer }));
+      return;
+    }
+    const state = pending.get(userId);
     if (state === undefined) {
       await next(); // ввод не ждём — пусть его обработает одобрение/комменты
       return;
@@ -227,18 +263,31 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
       await next();
       return;
     }
-    await handleInput(ctx, deps, pending, newPostDrafts, state, text);
-  });
-
-  // Фото в личке — только когда мастер «Новый пост» ждёт картинку (иначе дальше).
-  admin.chatType("private").on("message:photo", async (ctx, next) => {
-    if (pending.get(adminId)?.kind !== "npPhotoUp") {
+    const viewer = await resolveMenuViewer(deps.prisma, userId);
+    if (viewer === null) {
+      pending.delete(userId); // владельца отозвали между вводами — режим сбрасываем
       await next();
       return;
     }
-    const draft = newPostDrafts.get(adminId);
+    await handleInput(ctx, { ...deps, viewer }, pending, newPostDrafts, state, text);
+  });
+
+  // Фото в личке — только когда мастер «Новый пост» ждёт картинку (иначе дальше).
+  composer.chatType("private").on("message:photo", async (ctx, next) => {
+    const userId = ctx.from.id;
+    if (pending.get(userId)?.kind !== "npPhotoUp") {
+      await next();
+      return;
+    }
+    const viewer = await resolveMenuViewer(deps.prisma, userId);
+    if (viewer === null) {
+      pending.delete(userId);
+      await next();
+      return;
+    }
+    const draft = newPostDrafts.get(userId);
     if (draft === undefined) {
-      pending.delete(adminId);
+      pending.delete(userId);
       return;
     }
     // Берём самый крупный размер (последний в массиве PhotoSize).
@@ -250,13 +299,17 @@ export function createAdminComposer(deps: AdminDeps): Composer<Context> {
     }
     draft.photoFileId = fileId;
     draft.pexelsQuery = null;
-    pending.set(adminId, { kind: "npDateTime" });
-    const channel = await resolvePostingChannelSelected(deps);
+    pending.set(userId, { kind: "npDateTime" });
+    const channel = await resolvePostingChannelSelected({ ...deps, viewer });
     await sendScreen(ctx, renderNewPostPrompt(dateTimePromptText(channel?.timezone)));
   });
 
   return composer;
 }
+
+/** Отказ незарегистрированному пользователю (гейт 14b-1). */
+const MENU_DENIED_TEXT =
+  "Меню доступно владельцам каналов по приглашению. Попроси владельца бота пригласить тебя.";
 
 /** Текст шага «когда опубликовать» с поясом канала (Шаг 6c). */
 function dateTimePromptText(timezone: string | undefined): string {
@@ -300,7 +353,8 @@ async function routeCallback(
   action: string,
   args: readonly string[],
 ): Promise<void> {
-  const adminId = deps.adminId;
+  // Ключ эфемерных состояний (pending/drafts/выбранный канал) — пользователь меню (14b-1).
+  const userId = deps.viewer.userId;
 
   switch (action) {
     case "home":
@@ -322,7 +376,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      setSelectedChannel(adminId, channel.id);
+      setSelectedChannel(userId, channel.id);
       deps.logger.info({ channelId: channel.id }, "выбран текущий канал");
       await editScreen(ctx, await renderChannels(deps));
       await ctx.answerCallbackQuery({ text: `Текущий канал: ${channel.title}` });
@@ -330,8 +384,23 @@ async function routeCallback(
     }
 
     case "chadd":
-      pending.set(adminId, { kind: "addChannel" });
+      pending.set(userId, { kind: "addChannel" });
       await editScreen(ctx, renderAddChannelPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "invown":
+      // Приглашение владельца (14b-1) — только супервладелец. Кнопку видит только он
+      // (renderChannels), но callback можно скрафтить — перепроверяем.
+      if (userId !== deps.adminId) {
+        await ctx.answerCallbackQuery({
+          text: "Приглашать владельцев может только владелец бота.",
+          show_alert: true,
+        });
+        return;
+      }
+      pending.set(userId, { kind: "inviteOwner" });
+      await editScreen(ctx, renderInviteOwnerPrompt());
       await ctx.answerCallbackQuery();
       return;
 
@@ -357,8 +426,8 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      setSelectedChannel(adminId, channel.id);
-      pending.set(adminId, { kind: "setChannel" });
+      setSelectedChannel(userId, channel.id);
+      pending.set(userId, { kind: "setChannel" });
       await editScreen(ctx, renderSetChannelPrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -446,7 +515,7 @@ async function routeCallback(
       return;
 
     case "cd":
-      pending.set(adminId, { kind: "setCooldown" });
+      pending.set(userId, { kind: "setCooldown" });
       await editScreen(ctx, renderSetCooldownPrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -472,7 +541,7 @@ async function routeCallback(
     }
 
     case "aiaddw":
-      pending.set(adminId, { kind: "addAiTrigger" });
+      pending.set(userId, { kind: "addAiTrigger" });
       await editScreen(ctx, renderAddAiTriggerPrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -501,7 +570,7 @@ async function routeCallback(
     }
 
     case "aicap":
-      pending.set(adminId, { kind: "setAiCap" });
+      pending.set(userId, { kind: "setAiCap" });
       await editScreen(ctx, renderSetAiCapPrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -543,7 +612,7 @@ async function routeCallback(
     }
 
     case "modaddw":
-      pending.set(adminId, { kind: "addStopWord" });
+      pending.set(userId, { kind: "addStopWord" });
       await editScreen(ctx, renderAddStopWordPrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -588,7 +657,7 @@ async function routeCallback(
     }
 
     case "toxpol":
-      pending.set(adminId, { kind: "setToxicityPolicy" });
+      pending.set(userId, { kind: "setToxicityPolicy" });
       await editScreen(ctx, renderSetToxicityPolicyPrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -666,13 +735,13 @@ async function routeCallback(
     }
 
     case "achan":
-      pending.set(adminId, { kind: "setChannel" });
+      pending.set(userId, { kind: "setChannel" });
       await editScreen(ctx, renderSetChannelPrompt());
       await ctx.answerCallbackQuery();
       return;
 
     case "atadd":
-      pending.set(adminId, { kind: "addTime" });
+      pending.set(userId, { kind: "addTime" });
       await editScreen(ctx, renderAddTimePrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -796,7 +865,7 @@ async function routeCallback(
     }
 
     case "addw":
-      pending.set(adminId, { kind: "addTrigger" });
+      pending.set(userId, { kind: "addTrigger" });
       await editScreen(ctx, renderAddTriggerPrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -809,7 +878,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      pending.set(adminId, { kind: "addAnswer", word });
+      pending.set(userId, { kind: "addAnswer", word });
       await editScreen(ctx, renderAddAnswerPrompt(word, wIdx));
       await ctx.answerCallbackQuery();
       return;
@@ -830,7 +899,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      pending.set(adminId, { kind: "editAnswer", word, index: aIdx });
+      pending.set(userId, { kind: "editAnswer", word, index: aIdx });
       await editScreen(ctx, renderEditAnswerPrompt(word, wIdx, aIdx, current));
       await ctx.answerCallbackQuery();
       return;
@@ -937,7 +1006,7 @@ async function routeCallback(
 
     // Шаг 12g: вет чужого канала перед закупкой рекламы — жду ссылку/@username.
     case "vet":
-      pending.set(adminId, { kind: "vetChannel" });
+      pending.set(userId, { kind: "vetChannel" });
       await editScreen(ctx, renderVetPrompt());
       await ctx.answerCallbackQuery();
       return;
@@ -1067,7 +1136,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      pending.set(adminId, { kind: "editPostField", field, externalId });
+      pending.set(userId, { kind: "editPostField", field, externalId });
       await editScreen(ctx, renderEditPostFieldPrompt(field, externalId, post[field]));
       await ctx.answerCallbackQuery();
       return;
@@ -1111,8 +1180,8 @@ async function routeCallback(
 
     // ─── Мастер «Новый пост» (разовый, Шаг 6c) ───────────────────────────────
     case "np": {
-      drafts.set(adminId, { choices: [], pexelsQuery: null, photoFileId: null });
-      pending.set(adminId, { kind: "npTitle" });
+      drafts.set(userId, { choices: [], pexelsQuery: null, photoFileId: null });
+      pending.set(userId, { kind: "npTitle" });
       await editScreen(
         ctx,
         renderNewPostPrompt("📝 Новый разовый пост.\n\nПришли заголовок поста."),
@@ -1124,21 +1193,21 @@ async function routeCallback(
     case "npit": {
       const code = intArg(args, 0);
       const type = code === null ? undefined : newPostInteractiveByCode(code);
-      const draft = drafts.get(adminId);
+      const draft = drafts.get(userId);
       if (type === undefined || draft === undefined) {
         await ctx.answerCallbackQuery();
         return;
       }
       draft.interactiveType = type;
       if (type === "button_choice") {
-        pending.set(adminId, { kind: "npChoice" });
+        pending.set(userId, { kind: "npChoice" });
         await editScreen(ctx, renderNewPostChoices(draft));
       } else if (type === "button_prediction") {
-        pending.delete(adminId);
+        pending.delete(userId);
         await editScreen(ctx, await renderNewPostPools(deps));
       } else {
         // keyword_trigger / vote_123 — кнопок под постом нет, сразу к фото.
-        pending.delete(adminId);
+        pending.delete(userId);
         await editScreen(ctx, renderNewPostPhoto());
       }
       await ctx.answerCallbackQuery();
@@ -1146,7 +1215,7 @@ async function routeCallback(
     }
 
     case "npcd": {
-      const draft = drafts.get(adminId);
+      const draft = drafts.get(userId);
       if (draft === undefined) {
         await ctx.answerCallbackQuery();
         return;
@@ -1155,7 +1224,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery({ text: "Добавь хотя бы один вариант." });
         return;
       }
-      pending.delete(adminId);
+      pending.delete(userId);
       await editScreen(ctx, renderNewPostPhoto());
       await ctx.answerCallbackQuery();
       return;
@@ -1163,7 +1232,7 @@ async function routeCallback(
 
     case "nppl": {
       const idx = intArg(args, 0);
-      const draft = drafts.get(adminId);
+      const draft = drafts.get(userId);
       if (idx === null || draft === undefined) {
         await ctx.answerCallbackQuery();
         return;
@@ -1174,7 +1243,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      pending.set(adminId, { kind: "npBtnLabel", poolKey: key });
+      pending.set(userId, { kind: "npBtnLabel", poolKey: key });
       await editScreen(
         ctx,
         renderNewPostPrompt(
@@ -1187,13 +1256,13 @@ async function routeCallback(
 
     case "npph": {
       const code = intArg(args, 0);
-      const draft = drafts.get(adminId);
+      const draft = drafts.get(userId);
       if (code === null || draft === undefined) {
         await ctx.answerCallbackQuery();
         return;
       }
       if (code === 0) {
-        pending.set(adminId, { kind: "npPexels" });
+        pending.set(userId, { kind: "npPexels" });
         await editScreen(
           ctx,
           renderNewPostPrompt(
@@ -1201,7 +1270,7 @@ async function routeCallback(
           ),
         );
       } else if (code === 1) {
-        pending.set(adminId, { kind: "npPhotoUp" });
+        pending.set(userId, { kind: "npPhotoUp" });
         await editScreen(
           ctx,
           renderNewPostPrompt("📤 Пришли фото одним сообщением (как картинку)."),
@@ -1209,7 +1278,7 @@ async function routeCallback(
       } else {
         draft.pexelsQuery = null;
         draft.photoFileId = null;
-        pending.set(adminId, { kind: "npDateTime" });
+        pending.set(userId, { kind: "npDateTime" });
         const channel = await resolvePostingChannelSelected(deps);
         await editScreen(ctx, renderNewPostPrompt(dateTimePromptText(channel?.timezone)));
       }
@@ -1218,7 +1287,7 @@ async function routeCallback(
     }
 
     case "npsave": {
-      const draft = drafts.get(adminId);
+      const draft = drafts.get(userId);
       const channel = await resolvePostingChannelSelected(deps);
       if (
         draft === undefined ||
@@ -1229,8 +1298,8 @@ async function routeCallback(
         draft.interactiveType === undefined ||
         draft.publishAt === undefined
       ) {
-        drafts.delete(adminId);
-        pending.delete(adminId);
+        drafts.delete(userId);
+        pending.delete(userId);
         await editScreen(ctx, await renderPlan(deps));
         await ctx.answerCallbackQuery({ text: "Черновик неполон — начни заново." });
         return;
@@ -1246,8 +1315,8 @@ async function routeCallback(
         photoFileId: draft.photoFileId,
         publishAt: draft.publishAt,
       });
-      drafts.delete(adminId);
-      pending.delete(adminId);
+      drafts.delete(userId);
+      pending.delete(userId);
       deps.logger.info(
         { channelId: channel.id, externalId, publishAt: draft.publishAt.toISOString() },
         "разовый пост запланирован",
@@ -1258,8 +1327,8 @@ async function routeCallback(
     }
 
     case "npx": {
-      drafts.delete(adminId);
-      pending.delete(adminId);
+      drafts.delete(userId);
+      pending.delete(userId);
       await editScreen(ctx, await renderPlan(deps));
       await ctx.answerCallbackQuery({ text: "Отменено" });
       return;
@@ -1301,7 +1370,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      pending.set(adminId, { kind: "addButtonAnswer", poolKey: key });
+      pending.set(userId, { kind: "addButtonAnswer", poolKey: key });
       await editScreen(
         ctx,
         renderAddButtonAnswerPrompt(await buttonPoolName(deps, key), poolIdx),
@@ -1325,7 +1394,7 @@ async function routeCallback(
         await ctx.answerCallbackQuery();
         return;
       }
-      pending.set(adminId, { kind: "editButtonAnswer", poolKey: key, index: ansIdx });
+      pending.set(userId, { kind: "editButtonAnswer", poolKey: key, index: ansIdx });
       await editScreen(
         ctx,
         renderEditButtonAnswerPrompt(
@@ -1415,12 +1484,38 @@ async function handleInput(
       await ctx.reply("⚠️ Название канала: 1–100 символов. Попробуй ещё раз.");
       return; // остаёмся в режиме ввода
     }
-    const id = await createChannel(deps.prisma, { title });
-    setSelectedChannel(deps.adminId, id);
-    pending.delete(deps.adminId);
-    deps.logger.info({ channelId: id, title }, "канал создан и выбран текущим");
+    const id = await createChannel(deps.prisma, {
+      title,
+      ownerId: deps.viewer.ownerId,
+    });
+    setSelectedChannel(deps.viewer.userId, id);
+    pending.delete(deps.viewer.userId);
+    deps.logger.info(
+      { channelId: id, title, ownerId: deps.viewer.ownerId },
+      "канал создан и выбран текущим",
+    );
     await ctx.reply(
       `✅ Канал «${title}» создан и стал текущим.\nЗаполни его в разделах меню: триггеры, контент-план, цель публикации.`,
+    );
+    await sendScreen(ctx, await renderChannels(deps));
+    return;
+  }
+
+  // Приглашение владельца (Шаг 14b-1) не зависит от выбранного канала — обрабатываем
+  // до проверки на наличие текущего. Гейт «только супервладелец» уже прошёл в `invown`.
+  if (state.kind === "inviteOwner") {
+    const result = validateOwnerInvite(text);
+    if (!result.ok) {
+      await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
+      return; // остаёмся в режиме ввода
+    }
+    const { telegramUserId, name } = result.value;
+    await ensureOwner(deps.prisma, telegramUserId, name ?? undefined);
+    pending.delete(deps.viewer.userId);
+    deps.logger.info({ telegramUserId, name }, "владелец приглашён");
+    await ctx.reply(
+      `✅ Владелец ${name ?? String(telegramUserId)} приглашён.\n` +
+        "Пусть откроет /menu у этого бота и добавит бота админом в свой канал — канал привяжется к нему автоматически.",
     );
     await sendScreen(ctx, await renderChannels(deps));
     return;
@@ -1429,7 +1524,7 @@ async function handleInput(
   // Вет чужого канала (Шаг 12g) не зависит от выбранного своего канала —
   // обрабатываем до проверки на наличие текущего канала, как создание канала.
   if (state.kind === "vetChannel") {
-    pending.delete(deps.adminId);
+    pending.delete(deps.viewer.userId);
     const provider = createTelemetrProvider({
       apiKey: deps.telemetrApiKey,
       logger: deps.logger,
@@ -1462,7 +1557,7 @@ async function handleInput(
 
   const channel = await resolveSelectedChannel(deps);
   if (channel === null) {
-    pending.delete(deps.adminId);
+    pending.delete(deps.viewer.userId);
     await sendScreen(ctx, await renderMain(deps));
     return;
   }
@@ -1475,7 +1570,7 @@ async function handleInput(
         return; // остаёмся в режиме ввода
       }
       await addTrigger(deps.prisma, channel.id, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       deps.logger.info({ channelId: channel.id, word: result.value }, "триггер добавлен");
       await ctx.reply(`✅ Триггер «${result.value}» добавлен. Теперь добавь ему ответы.`);
       await sendScreen(ctx, await renderTriggers(deps, 0));
@@ -1489,7 +1584,7 @@ async function handleInput(
         return;
       }
       await addText(deps.prisma, channel.id, state.word, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply("✅ Ответ добавлен.");
       await sendScreen(ctx, await renderTriggerByWord(deps, state.word));
       return;
@@ -1508,7 +1603,7 @@ async function handleInput(
         state.index,
         result.value,
       );
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply(ok ? "✅ Ответ изменён." : "⚠️ Ответ не найден (возможно, удалён).");
       await sendScreen(ctx, await renderTriggerByWord(deps, state.word));
       return;
@@ -1521,7 +1616,7 @@ async function handleInput(
         return; // остаёмся в режиме ввода
       }
       await addTime(deps.prisma, channel.id, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply(`✅ Время добавлено: ${result.value}`);
       await sendScreen(ctx, await renderAutopost(deps));
       return;
@@ -1534,7 +1629,7 @@ async function handleInput(
         return; // остаёмся в режиме ввода
       }
       await setCooldownHours(deps.prisma, channel.id, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply(
         result.value === 0
           ? "✅ Кулдаун отключён."
@@ -1552,7 +1647,7 @@ async function handleInput(
         return; // остаёмся в режиме ввода
       }
       await addAiTriggerWord(deps.prisma, channel.id, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       deps.logger.info(
         { channelId: channel.id, word: result.value },
         "AI-триггер добавлен",
@@ -1570,7 +1665,7 @@ async function handleInput(
         return; // остаёмся в режиме ввода
       }
       await addStopWord(deps.prisma, channel.id, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       deps.logger.info(
         { channelId: channel.id, word: result.value },
         "стоп-слово добавлено",
@@ -1586,7 +1681,7 @@ async function handleInput(
       const reset = trimmed === "" || trimmed === "-";
       const policy = reset ? "" : trimmed.slice(0, 500);
       await setToxicityPolicy(deps.prisma, channel.id, policy);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply(
         reset
           ? "✅ Политика токсичности сброшена на авто по нише."
@@ -1603,7 +1698,7 @@ async function handleInput(
         return; // остаёмся в режиме ввода
       }
       await setDailyCap(deps.prisma, channel.id, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply(
         result.value === 0
           ? "✅ Платные AI-вызовы отключены (лимит 0)."
@@ -1620,7 +1715,7 @@ async function handleInput(
         return; // остаёмся в режиме ввода
       }
       await setChatId(deps.prisma, channel.id, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply(
         `✅ Канал публикации: ${result.value}\nУбедись, что бот — админ этого канала.`,
       );
@@ -1641,7 +1736,7 @@ async function handleInput(
         state.field,
         result.value,
       );
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply(
         ok ? "✅ Пост обновлён." : "⚠️ Пост не найден (возможно, удалён).",
       );
@@ -1656,7 +1751,7 @@ async function handleInput(
         return;
       }
       await addText(deps.prisma, channel.id, state.poolKey, result.value);
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply("✅ Ответ добавлен.");
       await sendScreen(ctx, await renderButtonPoolByKey(deps, state.poolKey));
       return;
@@ -1675,7 +1770,7 @@ async function handleInput(
         state.index,
         result.value,
       );
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await ctx.reply(ok ? "✅ Ответ изменён." : "⚠️ Ответ не найден (возможно, удалён).");
       await sendScreen(ctx, await renderButtonPoolByKey(deps, state.poolKey));
       return;
@@ -1688,13 +1783,13 @@ async function handleInput(
         await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
         return;
       }
-      const draft = drafts.get(deps.adminId);
+      const draft = drafts.get(deps.viewer.userId);
       if (draft === undefined) {
-        pending.delete(deps.adminId);
+        pending.delete(deps.viewer.userId);
         return;
       }
       draft.title = result.value;
-      pending.set(deps.adminId, { kind: "npText" });
+      pending.set(deps.viewer.userId, { kind: "npText" });
       await sendScreen(
         ctx,
         renderNewPostPrompt("Заголовок принят. Пришли основной текст поста."),
@@ -1708,13 +1803,13 @@ async function handleInput(
         await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
         return;
       }
-      const draft = drafts.get(deps.adminId);
+      const draft = drafts.get(deps.viewer.userId);
       if (draft === undefined) {
-        pending.delete(deps.adminId);
+        pending.delete(deps.viewer.userId);
         return;
       }
       draft.text = result.value;
-      pending.set(deps.adminId, { kind: "npCta" });
+      pending.set(deps.viewer.userId, { kind: "npCta" });
       await sendScreen(ctx, renderNewPostPrompt("Текст принят. Пришли призыв к действию (CTA)."));
       return;
     }
@@ -1725,13 +1820,13 @@ async function handleInput(
         await ctx.reply(`⚠️ ${result.error}\nПопробуй ещё раз.`);
         return;
       }
-      const draft = drafts.get(deps.adminId);
+      const draft = drafts.get(deps.viewer.userId);
       if (draft === undefined) {
-        pending.delete(deps.adminId);
+        pending.delete(deps.viewer.userId);
         return;
       }
       draft.cta = result.value;
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await sendScreen(ctx, renderNewPostInteractive());
       return;
     }
@@ -1752,9 +1847,9 @@ async function handleInput(
         await ctx.reply(`⚠️ ${answer.error}`);
         return;
       }
-      const draft = drafts.get(deps.adminId);
+      const draft = drafts.get(deps.viewer.userId);
       if (draft === undefined) {
-        pending.delete(deps.adminId);
+        pending.delete(deps.viewer.userId);
         return;
       }
       draft.choices.push({ label, answer: answer.value });
@@ -1768,13 +1863,13 @@ async function handleInput(
         await ctx.reply("⚠️ Подпись кнопки: 1–60 символов.");
         return;
       }
-      const draft = drafts.get(deps.adminId);
+      const draft = drafts.get(deps.viewer.userId);
       if (draft === undefined) {
-        pending.delete(deps.adminId);
+        pending.delete(deps.viewer.userId);
         return;
       }
       draft.button = { type: state.poolKey, label };
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await sendScreen(ctx, renderNewPostPhoto());
       return;
     }
@@ -1785,14 +1880,14 @@ async function handleInput(
         await ctx.reply("⚠️ Запрос для фото: 1–100 символов.");
         return;
       }
-      const draft = drafts.get(deps.adminId);
+      const draft = drafts.get(deps.viewer.userId);
       if (draft === undefined) {
-        pending.delete(deps.adminId);
+        pending.delete(deps.viewer.userId);
         return;
       }
       draft.pexelsQuery = query;
       draft.photoFileId = null;
-      pending.set(deps.adminId, { kind: "npDateTime" });
+      pending.set(deps.viewer.userId, { kind: "npDateTime" });
       const posting = await resolvePostingChannelSelected(deps);
       await sendScreen(ctx, renderNewPostPrompt(dateTimePromptText(posting?.timezone)));
       return;
@@ -1807,8 +1902,8 @@ async function handleInput(
     case "npDateTime": {
       const posting = await resolvePostingChannelSelected(deps);
       if (posting === null) {
-        pending.delete(deps.adminId);
-        drafts.delete(deps.adminId);
+        pending.delete(deps.viewer.userId);
+        drafts.delete(deps.viewer.userId);
         await sendScreen(ctx, await renderMain(deps));
         return;
       }
@@ -1817,13 +1912,13 @@ async function handleInput(
         await ctx.reply(`⚠️ ${result.error}`);
         return;
       }
-      const draft = drafts.get(deps.adminId);
+      const draft = drafts.get(deps.viewer.userId);
       if (draft === undefined) {
-        pending.delete(deps.adminId);
+        pending.delete(deps.viewer.userId);
         return;
       }
       draft.publishAt = result.value;
-      pending.delete(deps.adminId);
+      pending.delete(deps.viewer.userId);
       await sendScreen(ctx, renderNewPostPreview(draft, posting.timezone));
       return;
     }

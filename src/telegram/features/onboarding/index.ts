@@ -6,13 +6,16 @@ import {
   evaluateChannelRights,
   extractRights,
 } from "../../../core/onboarding/membership.js";
-import { registerChannelFromOnboarding } from "../../../db/repositories/channelRepository.js";
+import {
+  getOwnerTelegramIdByChatId,
+  registerChannelFromOnboarding,
+} from "../../../db/repositories/channelRepository.js";
+import { findOwnerByTelegramId } from "../../../db/repositories/ownerRepository.js";
 
-/** Зависимости онбординга: БД (регистрация канала), лог, id владельца (кому слать DM). */
+/** Зависимости онбординга: БД (гейт владельцев + регистрация канала) и лог. */
 export interface OnboardingDeps {
   prisma: PrismaClient;
   logger: Logger;
-  adminId: number;
 }
 
 /**
@@ -22,6 +25,11 @@ export interface OnboardingDeps {
  * «Подключи канал → работает»: владелец добавляет бота админом в канал → бот авто-регистрирует
  * канал (chatId/username/title), проверяет право публиковать и пишет владельцу. Реагируем
  * только на каналы; группы/супергруппы — это обсуждения (их ведёт композер комментов).
+ *
+ * Мультитенант (Шаг 14b-1): подключать канал может ЛЮБОЙ зарегистрированный владелец
+ * (строка в `Owner`), а не только супервладелец; канал штампуется его `ownerId` и попадает
+ * в его скоуп меню. DM о подключении идёт подключившему; о разжаловании/удалении бота —
+ * владельцу КАНАЛА (по `Channel.ownerId`). Незарегистрированные пользователи игнорируются.
  */
 export function createOnboardingComposer(deps: OnboardingDeps): Composer<Context> {
   const composer = new Composer<Context>();
@@ -32,25 +40,26 @@ export function createOnboardingComposer(deps: OnboardingDeps): Composer<Context
     if (chat.type !== "channel") {
       return;
     }
-    // Бот публичный: добавить его админом в канал может кто угодно. Регистрируем
-    // канал (и шлём DM) только когда права менял сам владелец — чужие каналы не
-    // должны попадать в реестр и путать меню.
-    if (upd.from.id !== deps.adminId) {
-      deps.logger.warn(
-        { chatId: chat.id, title: chat.title, byUserId: upd.from.id },
-        "онбординг: изменение членства не от владельца — игнорирую",
-      );
-      return;
-    }
 
     const change = classifyBotMembership(
       upd.old_chat_member.status,
       upd.new_chat_member.status,
     );
     const title = chat.title;
+    const chatId = String(chat.id);
 
     if (change === "promoted") {
-      const chatId = String(chat.id);
+      // Бот публичный: добавить его админом может кто угодно. Регистрируем канал
+      // только для зарегистрированного владельца — чужие каналы в реестр не попадают.
+      const owner = await findOwnerByTelegramId(deps.prisma, upd.from.id);
+      if (owner === null) {
+        deps.logger.warn(
+          { chatId: chat.id, title, byUserId: upd.from.id },
+          "онбординг: бота добавил незарегистрированный пользователь — игнорирую",
+        );
+        return;
+      }
+
       const username = chat.username ?? null;
       const member = upd.new_chat_member;
       const canPostRaw =
@@ -63,6 +72,7 @@ export function createOnboardingComposer(deps: OnboardingDeps): Composer<Context
         chatId,
         username,
         title,
+        ownerId: owner.id,
       });
       deps.logger.info(
         {
@@ -70,6 +80,7 @@ export function createOnboardingComposer(deps: OnboardingDeps): Composer<Context
           username,
           channelId: result.id,
           created: result.created,
+          ownerId: owner.id,
           canPost: rights.canPost,
         },
         "онбординг: канал подключён",
@@ -81,43 +92,45 @@ export function createOnboardingComposer(deps: OnboardingDeps): Composer<Context
       const tail = rights.canPost
         ? "Можно включать автопостинг в «📡 Каналы»."
         : "Чтобы публиковать посты, дай боту право «Публикация сообщений» в настройках администратора канала.";
-      await notifyOwner(ctx, deps, `${lead}\n${rights.summary}\n\n${tail}`);
+      await notifyUser(ctx, deps, upd.from.id, `${lead}\n${rights.summary}\n\n${tail}`);
       return;
     }
 
-    if (change === "demoted") {
-      await notifyOwner(
-        ctx,
-        deps,
-        `⚠️ Бота лишили прав администратора в канале «${title}». Автопостинг и проверка прав не сработают, пока права не вернёшь.`,
-      );
-      return;
-    }
-
-    if (change === "removed") {
-      await notifyOwner(
-        ctx,
-        deps,
-        `⚠️ Бота убрали из канала «${title}». В реестре канал остаётся — выключи его в «📡 Каналы», если он больше не нужен.`,
-      );
+    if (change === "demoted" || change === "removed") {
+      // Разжаловать/убрать бота может любой админ канала — уведомляем владельца
+      // КАНАЛА из реестра. Канал не зарегистрирован или без владельца → некому писать.
+      const ownerTelegramId = await getOwnerTelegramIdByChatId(deps.prisma, chatId);
+      if (ownerTelegramId === null) {
+        deps.logger.warn(
+          { chatId: chat.id, title, change },
+          "онбординг: смена прав в канале без владельца в реестре — некого уведомить",
+        );
+        return;
+      }
+      const text =
+        change === "demoted"
+          ? `⚠️ Бота лишили прав администратора в канале «${title}». Автопостинг и проверка прав не сработают, пока права не вернёшь.`
+          : `⚠️ Бота убрали из канала «${title}». В реестре канал остаётся — выключи его в «📡 Каналы», если он больше не нужен.`;
+      await notifyUser(ctx, deps, Number(ownerTelegramId), text);
     }
   });
 
   return composer;
 }
 
-/** Шлёт DM владельцу; глушит GrammyError (владелец не нажал /start у бота). */
-async function notifyOwner(
+/** Шлёт DM пользователю; глушит GrammyError (человек не нажал /start у бота). */
+async function notifyUser(
   ctx: Context,
   deps: OnboardingDeps,
+  telegramUserId: number,
   text: string,
 ): Promise<void> {
   try {
-    await ctx.api.sendMessage(deps.adminId, text);
+    await ctx.api.sendMessage(telegramUserId, text);
   } catch (err) {
     if (err instanceof GrammyError) {
       deps.logger.warn(
-        { err: err.description },
+        { telegramUserId, err: err.description },
         "онбординг: не смог уведомить владельца (нажми /start у бота)",
       );
       return;

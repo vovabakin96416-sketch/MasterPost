@@ -247,6 +247,11 @@ export async function renderChannels(deps: AdminDeps): Promise<Screen> {
     ];
   });
   rows.push([{ label: "➕ Добавить канал", data: encodeCb("chadd") }]);
+  // Приглашение владельцев (Шаг 14b-1) — служебная функция супервладельца:
+  // остальные видят только свои каналы, без управления доступом.
+  if (deps.viewer.userId === deps.adminId) {
+    rows.push([{ label: "➕ Пригласить владельца", data: encodeCb("invown") }]);
+  }
   rows.push(navRow());
 
   const header =
@@ -315,6 +320,19 @@ export function renderRightsCheck(
   return {
     text: lines.join("\n"),
     keyboard: buildKeyboard([navRow(encodeCb("chd", idx))]),
+  };
+}
+
+/** Экран-приглашение: жду Telegram user id нового владельца (Шаг 14b-1, только супервладелец). */
+export function renderInviteOwnerPrompt(): Screen {
+  return {
+    text:
+      "➕ Пригласить владельца\n\n" +
+      "Пришли Telegram user id приглашаемого одним сообщением, можно с именем:\n" +
+      "123456789 Анна\n\n" +
+      "Id — число; человек может узнать его, написав /start боту @userinfobot.\n" +
+      "После приглашения владелец открывает /menu у этого бота и добавляет бота админом в свой канал.",
+    keyboard: buildKeyboard([navRow(encodeCb("ch"))]),
   };
 }
 

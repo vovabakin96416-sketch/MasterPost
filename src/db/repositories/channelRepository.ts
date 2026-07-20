@@ -307,9 +307,9 @@ export async function listChannels(
 
 /**
  * Каналы КОНКРЕТНОГО владельца (Шаг 14a) — та же форма и порядок, что у `listChannels`,
- * плюс фильтр по `ownerId`. Пока не используется: переключатель меню перейдёт на неё
- * в 14b, когда включим разграничение доступа. `listChannels` (все каналы) остаётся —
- * она нужна рантайму и супервладельцу.
+ * плюс фильтр по `ownerId`. С 14b-1 на ней стоит переключатель каналов меню
+ * (`resolveChannelMenu`) — каждый владелец видит только своё. `listChannels`
+ * (все каналы) остаётся для служебных скриптов (`backfill-campaign-start`).
  */
 export async function listChannelsByOwner(
   prisma: PrismaClient,
@@ -331,16 +331,17 @@ export async function listChannelsByOwner(
 
 /**
  * Создаёт ПУСТОЙ канал (без контент-плана/пулов) для мультиканальности (Шаг 8a).
- * Минимум полей: название от владельца + ниша-заглушка; остальное — дефолты схемы
- * (язык ru, пояс Europe/Moscow, isActive, пустые triggerWords). Отдельно от
- * `upsertChannel` (тот по username, для сида). Возвращает id нового канала.
+ * Минимум полей: название + владелец (Шаг 14b-1 — «➕ Добавить канал» штампует
+ * `ownerId`, канал сразу виден в скоупленном меню) + ниша-заглушка; остальное —
+ * дефолты схемы (язык ru, пояс Europe/Moscow, isActive, пустые triggerWords).
+ * Отдельно от `upsertChannel` (тот по username, для сида). Возвращает id нового канала.
  */
 export async function createChannel(
   prisma: PrismaClient,
-  data: { title: string },
+  data: { title: string; ownerId: string },
 ): Promise<string> {
   const channel = await prisma.channel.create({
-    data: { title: data.title, niche: "—" },
+    data: { title: data.title, ownerId: data.ownerId, niche: "—" },
     select: { id: true },
   });
   return channel.id;
@@ -371,34 +372,42 @@ export interface OnboardingResult {
  * затем по `chatId`; если нашёл — обновляет цель публикации/идентификаторы/название и
  * включает его; иначе создаёт новый (ниша-заглушка «—», как `createChannel`). Возвращает
  * id и флаг `created`.
+ *
+ * Владелец (Шаг 14b-1): новый канал штампуется `ownerId` подключившего; у существующего
+ * владелец ставится ТОЛЬКО если его ещё нет (`ownerId IS NULL`) — переподключение бота
+ * другим владельцем чужой канал не перехватывает (передача канала — руками супервладельца).
  */
 export async function registerChannelFromOnboarding(
   prisma: PrismaClient,
-  data: { chatId: string; username: string | null; title: string },
+  data: { chatId: string; username: string | null; title: string; ownerId: string },
 ): Promise<OnboardingResult> {
-  let existingId: string | null = null;
+  let existing: { id: string; ownerId: string | null } | null = null;
   if (data.username !== null) {
-    const byName = await prisma.channel.findUnique({
+    existing = await prisma.channel.findUnique({
       where: { username: data.username },
-      select: { id: true },
+      select: { id: true, ownerId: true },
     });
-    existingId = byName?.id ?? null;
   }
-  if (existingId === null) {
-    existingId = await findChannelByChatId(prisma, data.chatId);
+  if (existing === null) {
+    existing = await prisma.channel.findFirst({
+      where: { chatId: data.chatId },
+      select: { id: true, ownerId: true },
+      orderBy: { createdAt: "asc" },
+    });
   }
 
-  if (existingId !== null) {
+  if (existing !== null) {
     await prisma.channel.update({
-      where: { id: existingId },
+      where: { id: existing.id },
       data: {
         chatId: data.chatId,
         username: data.username,
         title: data.title,
         isActive: true,
+        ownerId: existing.ownerId ?? data.ownerId,
       },
     });
-    return { id: existingId, created: false };
+    return { id: existing.id, created: false };
   }
 
   const created = await prisma.channel.create({
@@ -406,11 +415,29 @@ export async function registerChannelFromOnboarding(
       title: data.title,
       username: data.username,
       chatId: data.chatId,
+      ownerId: data.ownerId,
       niche: "—",
     },
     select: { id: true },
   });
   return { id: created.id, created: true };
+}
+
+/**
+ * Telegram user id владельца канала с целью публикации `chatId`, или `null`
+ * (канал не зарегистрирован либо без владельца). Шаг 14b-1: уведомления онбординга
+ * (бота разжаловали/убрали из канала) идут владельцу КАНАЛА, а не супервладельцу.
+ */
+export async function getOwnerTelegramIdByChatId(
+  prisma: PrismaClient,
+  chatId: string,
+): Promise<string | null> {
+  const row = await prisma.channel.findFirst({
+    where: { chatId },
+    select: { owner: { select: { telegramUserId: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  return row?.owner?.telegramUserId ?? null;
 }
 
 /** Включает/выключает канал (Шаг 8a). Неактивный канал рантайм не ведёт. */

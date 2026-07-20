@@ -2,42 +2,57 @@ import { pickSelectedId } from "../../../core/menu/selectChannel.js";
 import {
   getChannelById,
   getPostingChannelById,
-  listChannels,
+  listChannelsByOwner,
   type ActiveChannel,
   type ChannelListItem,
   type PostingChannel,
 } from "../../../db/repositories/channelRepository.js";
-import type { AdminDeps } from "./types.js";
+import { findOwnerByTelegramId } from "../../../db/repositories/ownerRepository.js";
+import type { PrismaClient } from "../../../db/client.js";
+import type { AdminDeps, MenuViewer } from "./types.js";
 
 /**
- * Контекст «текущего канала» меню админа (Шаг 8a, мультиканальность).
+ * Контекст «текущего канала» меню (Шаг 8a, мультиканальность; Шаг 14b-1, мультитенант).
  *
- * Схема БД мультиканальна с Шага 1 (все функции принимают `channelId`); до Шага 8
- * меню всегда работало с «первым активным» каналом (`getActiveChannel`). Здесь мы
- * заменяем это на «канал, выбранный владельцем», сохраняя тот же тип возврата —
- * замены `getActiveChannel`/`getPostingChannel` в меню получаются механическими.
+ * С 14b-1 меню открыто любому зарегистрированному владельцу, поэтому список каналов
+ * СКОУПЛЕН: `listChannelsByOwner(viewer.ownerId)` вместо всех каналов. Это же закрывает
+ * дыру переключателя — канал выбирается по индексу в списке владельца, до чужого канала
+ * крафтнутый callback не дотянется (индекс мимо списка → экран каналов заново).
  *
- * Выбор храним in-memory (по образцу `PendingInput` Шага 3): эфемерно, теряется при
- * рестарте — тогда `pickSelectedId` падает на первый канал. Для одного владельца
- * этого достаточно; персистентность — задел на мульти-владельца (Шаг 9).
+ * Выбор храним in-memory по Telegram user id пользователя (по образцу `PendingInput`
+ * Шага 3): эфемерно, теряется при рестарте — тогда `pickSelectedId` падает на первый
+ * канал владельца.
  *
- * ⚠️ Рантайм (автопостинг/триггеры/аналитика) этот модуль НЕ использует — он и
- * дальше берёт первый активный канал, пока мультиканальный рантайм не сделан в 8b/8c.
+ * ⚠️ Рантайм (автопостинг/триггеры/аналитика) этот модуль НЕ использует — он ведёт
+ * все активные каналы независимо от владельцев.
  */
 
 const selected = new Map<number, string>();
 
-/** Запоминает выбранный админом канал (после переключения в меню). */
-export function setSelectedChannel(adminId: number, channelId: string): void {
-  selected.set(adminId, channelId);
+/**
+ * Гейт меню (Шаг 14b-1): пользователь Telegram → зарегистрированный владелец, или
+ * `null` (не приглашён — меню закрыто). Супервладелец зарегистрирован всегда
+ * (`ensureOwner(ADMIN_ID)` на старте, 14a).
+ */
+export async function resolveMenuViewer(
+  prisma: PrismaClient,
+  userId: number,
+): Promise<MenuViewer | null> {
+  const owner = await findOwnerByTelegramId(prisma, userId);
+  return owner === null ? null : { userId, ownerId: owner.id };
 }
 
-/** Список каналов + id текущего одним запросом — для экранов раздела «Каналы» и шапки меню. */
+/** Запоминает выбранный пользователем канал (после переключения в меню). */
+export function setSelectedChannel(userId: number, channelId: string): void {
+  selected.set(userId, channelId);
+}
+
+/** Список каналов владельца + id текущего одним запросом — для экранов раздела «Каналы» и шапки меню. */
 export async function resolveChannelMenu(
   deps: AdminDeps,
 ): Promise<{ channels: ChannelListItem[]; currentId: string | null }> {
-  const channels = await listChannels(deps.prisma);
-  const currentId = pickSelectedId(selected.get(deps.adminId), channels);
+  const channels = await listChannelsByOwner(deps.prisma, deps.viewer.ownerId);
+  const currentId = pickSelectedId(selected.get(deps.viewer.userId), channels);
   return { channels, currentId };
 }
 
