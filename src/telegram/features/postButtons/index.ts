@@ -119,10 +119,20 @@ async function handlePrediction(
   } catch (err) {
     if (err instanceof GrammyError) {
       // Чаще всего «bot can't initiate conversation» — юзер не нажимал /start.
-      await ctx.answerCallbackQuery({
-        text: "Напиши мне /start — и получишь ответ в личку! 🔮",
-        show_alert: true,
-      });
+      // Текстовый алерт не кликабелен, и люди не понимают, куда писать /start.
+      // Открываем чат с ботом напрямую: t.me/<bot>?start — Telegram покажет
+      // кнопку «START», один тап и разговор начат.
+      const username = ctx.me.username;
+      if (username) {
+        await ctx.answerCallbackQuery({
+          url: `https://t.me/${username}?start=predict`,
+        });
+      } else {
+        await ctx.answerCallbackQuery({
+          text: "Открой чат со мной и нажми «Старт» — и получишь ответ в личку! 🔮",
+          show_alert: true,
+        });
+      }
       return;
     }
     throw err;
