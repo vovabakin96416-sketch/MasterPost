@@ -13,6 +13,15 @@ import {
   REVOKE_DENIED_SELF,
 } from "../src/core/menu/ownerAccess";
 import {
+  ACCESS_DENIED_TRIAL_EXPIRED,
+  checkOwnerAccess,
+  extendTrialUntil,
+  formatOwnerPlan,
+  trialDaysLeft,
+  trialExpiresAt,
+  TRIAL_DAYS,
+} from "../src/core/menu/ownerPlan";
+import {
   MAX_ANSWER_LENGTH,
   MAX_DAILY_CAP,
   MAX_OWNER_NAME_LENGTH,
@@ -279,5 +288,121 @@ describe("canRevokeOwner (отзыв доступа, Шаг 14b-4)", () => {
         targetTelegramUserId: ` ${String(adminId)} `,
       }).ok,
     ).toBe(false);
+  });
+});
+
+describe("checkOwnerAccess (срок доступа, Шаг 14e)", () => {
+  const now = new Date("2026-07-21T12:00:00Z");
+  const base = { now, isSuperOwner: false } as const;
+
+  it("бессрочный тариф — доступ есть", () => {
+    expect(checkOwnerAccess({ ...base, plan: "active", trialUntil: null })).toEqual({
+      ok: true,
+    });
+  });
+
+  it("действующий триал — доступ есть", () => {
+    expect(
+      checkOwnerAccess({
+        ...base,
+        plan: "trial",
+        trialUntil: new Date("2026-07-22T12:00:00Z"),
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("истёкший триал — отказ", () => {
+    expect(
+      checkOwnerAccess({
+        ...base,
+        plan: "trial",
+        trialUntil: new Date("2026-07-20T12:00:00Z"),
+      }),
+    ).toEqual({ ok: false, error: ACCESS_DENIED_TRIAL_EXPIRED });
+  });
+
+  it("срок ровно сейчас — уже истёк", () => {
+    expect(
+      checkOwnerAccess({ ...base, plan: "trial", trialUntil: new Date(now) }).ok,
+    ).toBe(false);
+  });
+
+  it("триал без срока — доступ есть (fail-open, бот такого не создаёт)", () => {
+    expect(
+      checkOwnerAccess({ ...base, plan: "trial", trialUntil: null }).ok,
+    ).toBe(true);
+  });
+
+  it("супервладельца истёкший триал не запирает — бот не остаётся без хозяина", () => {
+    expect(
+      checkOwnerAccess({
+        now,
+        isSuperOwner: true,
+        plan: "trial",
+        trialUntil: new Date("2020-01-01T00:00:00Z"),
+      }),
+    ).toEqual({ ok: true });
+  });
+});
+
+describe("сроки триала (Шаг 14e)", () => {
+  const now = new Date("2026-07-21T12:00:00Z");
+
+  it("trialExpiresAt отсчитывает TRIAL_DAYS от «сейчас»", () => {
+    expect(trialExpiresAt(now).toISOString()).toBe("2026-08-04T12:00:00.000Z");
+    expect(TRIAL_DAYS).toBe(14);
+  });
+
+  it("продление действующего триала добавляет дни к остатку, а не укорачивает", () => {
+    const current = new Date("2026-07-25T12:00:00Z");
+    expect(extendTrialUntil(current, now).toISOString()).toBe(
+      "2026-08-08T12:00:00.000Z",
+    );
+  });
+
+  it("продление истёкшего (или отсутствующего) триала считается от «сейчас»", () => {
+    expect(
+      extendTrialUntil(new Date("2026-07-01T12:00:00Z"), now).toISOString(),
+    ).toBe("2026-08-04T12:00:00.000Z");
+    expect(extendTrialUntil(null, now).toISOString()).toBe(
+      "2026-08-04T12:00:00.000Z",
+    );
+  });
+
+  it("остаток дней округляется вверх; истёк → 0, нет срока → null", () => {
+    expect(trialDaysLeft(new Date("2026-07-22T00:00:00Z"), now)).toBe(1);
+    expect(trialDaysLeft(new Date("2026-07-23T12:00:00Z"), now)).toBe(2);
+    expect(trialDaysLeft(new Date("2026-07-20T12:00:00Z"), now)).toBe(0);
+    expect(trialDaysLeft(null, now)).toBeNull();
+  });
+
+  it("строка тарифа для экрана «Владельцы» склоняет дни", () => {
+    const trial = (until: string): string =>
+      formatOwnerPlan({
+        plan: "trial",
+        trialUntil: new Date(until),
+        now,
+        isSuperOwner: false,
+      });
+    expect(trial("2026-07-22T12:00:00Z")).toBe("триал, осталось 1 день");
+    expect(trial("2026-07-24T12:00:00Z")).toBe("триал, осталось 3 дня");
+    expect(trial("2026-08-04T12:00:00Z")).toBe("триал, осталось 14 дней");
+    expect(trial("2026-07-20T12:00:00Z")).toBe("триал истёк");
+    expect(
+      formatOwnerPlan({
+        plan: "active",
+        trialUntil: null,
+        now,
+        isSuperOwner: false,
+      }),
+    ).toBe("бессрочно");
+    expect(
+      formatOwnerPlan({
+        plan: "trial",
+        trialUntil: new Date("2020-01-01T00:00:00Z"),
+        now,
+        isSuperOwner: true,
+      }),
+    ).toBe("владелец бота");
   });
 });

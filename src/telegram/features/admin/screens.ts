@@ -1,6 +1,7 @@
 import { encodeCb } from "../../../core/menu/callbackData.js";
 import { paginate } from "../../../core/menu/paginate.js";
 import { canRevokeOwner } from "../../../core/menu/ownerAccess.js";
+import { formatOwnerPlan, TRIAL_DAYS } from "../../../core/menu/ownerPlan.js";
 import { listOwners } from "../../../db/repositories/ownerRepository.js";
 import { poolHealth, poolAgeDays } from "../../../core/content/poolHealth.js";
 import { getChannelDisplay } from "../../../db/repositories/channelRepository.js";
@@ -347,6 +348,7 @@ export function renderInviteOwnerPrompt(): Screen {
  */
 export async function renderOwners(deps: AdminDeps): Promise<Screen> {
   const owners = await listOwners(deps.prisma);
+  const now = new Date();
   const rows: Btn[][] = [];
   const lines = ["👤 Владельцы", ""];
 
@@ -354,11 +356,27 @@ export async function renderOwners(deps: AdminDeps): Promise<Screen> {
     const isAdmin = o.telegramUserId === String(deps.adminId);
     const label = o.name ?? `id ${o.telegramUserId}`;
     const channels = `${String(o.channelCount)} ${pluralRu(o.channelCount, ["канал", "канала", "каналов"])}`;
+    // Тариф (14e) — тем же ядром, что и гейт: на экране видно ровно то,
+    // по чему бот принимает решение о доступе.
+    const plan = formatOwnerPlan({
+      plan: o.plan,
+      trialUntil: o.trialUntil,
+      now,
+      isSuperOwner: isAdmin,
+    });
     lines.push(
-      `${isAdmin ? "👑" : "👤"} ${label} · id ${o.telegramUserId} · ${channels}`,
+      `${isAdmin ? "👑" : "👤"} ${label} · id ${o.telegramUserId} · ${channels} · ${plan}`,
     );
-    // У супервладельца кнопки отзыва нет — иначе бот останется без хозяина.
+    // У супервладельца ни срока, ни отзыва — иначе бот останется без хозяина.
     if (!isAdmin) {
+      rows.push([
+        { label: `⏳ +${String(TRIAL_DAYS)} дней: ${label}`, data: encodeCb("ownext", i) },
+      ]);
+      if (o.plan !== "active") {
+        rows.push([
+          { label: `♾ Бессрочно: ${label}`, data: encodeCb("ownact", i) },
+        ]);
+      }
       rows.push([
         { label: `🚫 Отозвать: ${label}`, data: encodeCb("ownrm", i) },
       ]);
@@ -370,7 +388,8 @@ export async function renderOwners(deps: AdminDeps): Promise<Screen> {
   }
   lines.push(
     "",
-    "👑 — владелец бота (доступ не отзывается).",
+    "👑 — владелец бота (доступ не отзывается и не ограничен сроком).",
+    `Приглашённый получает бесплатный доступ на ${String(TRIAL_DAYS)} дней. Когда срок выходит, бот перестаёт пускать его в меню сам; каналы при этом продолжают жить по расписанию.`,
     "Отзыв убирает доступ к меню. Каналы отозванного не удаляются: они становятся бесхозными и возвращаются владельцу бота при ближайшем перезапуске.",
   );
 

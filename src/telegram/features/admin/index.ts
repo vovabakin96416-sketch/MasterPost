@@ -93,7 +93,14 @@ import {
   ensureOwner,
   listOwners,
   removeOwner,
+  setOwnerPlanActive,
+  setOwnerTrial,
 } from "../../../db/repositories/ownerRepository.js";
+import {
+  extendTrialUntil,
+  trialExpiresAt,
+  TRIAL_DAYS,
+} from "../../../core/menu/ownerPlan.js";
 import {
   addText,
   getTextPool,
@@ -211,13 +218,13 @@ export function createAdminComposer(deps: AdminBotDeps): Composer<Context> {
     if (userId === undefined) {
       return;
     }
-    const viewer = await resolveMenuViewer(deps.prisma, userId);
-    if (viewer === null) {
-      await ctx.reply(MENU_DENIED_TEXT);
+    const access = await resolveMenuViewer(deps.prisma, userId, deps.adminId);
+    if (!access.ok) {
+      await ctx.reply(access.error);
       return;
     }
     pending.delete(userId);
-    await sendScreen(ctx, await renderMain({ ...deps, viewer }));
+    await sendScreen(ctx, await renderMain({ ...deps, viewer: access.viewer }));
   });
 
   // Кнопки меню: сначала дёшево разбираем callback (чужие отдаём дальше без похода
@@ -229,9 +236,9 @@ export function createAdminComposer(deps: AdminBotDeps): Composer<Context> {
       return;
     }
     const userId = ctx.callbackQuery.from.id;
-    const viewer = await resolveMenuViewer(deps.prisma, userId);
-    if (viewer === null) {
-      await ctx.answerCallbackQuery({ text: MENU_DENIED_TEXT, show_alert: true });
+    const access = await resolveMenuViewer(deps.prisma, userId, deps.adminId);
+    if (!access.ok) {
+      await ctx.answerCallbackQuery({ text: access.error, show_alert: true });
       return;
     }
     // Любое нажатие кнопки отменяет режим ожидания ввода.
@@ -242,7 +249,7 @@ export function createAdminComposer(deps: AdminBotDeps): Composer<Context> {
     }
     await routeCallback(
       ctx,
-      { ...deps, viewer },
+      { ...deps, viewer: access.viewer },
       pending,
       newPostDrafts,
       parsed.action,
@@ -257,14 +264,20 @@ export function createAdminComposer(deps: AdminBotDeps): Composer<Context> {
     const userId = ctx.from.id;
     // Нажатие постоянной кнопки «📋 Меню» = открыть меню (как /menu), отменив ввод.
     if (ctx.message.text === MENU_BUTTON_TEXT) {
-      const viewer = await resolveMenuViewer(deps.prisma, userId);
-      if (viewer === null) {
+      const access = await resolveMenuViewer(deps.prisma, userId, deps.adminId);
+      if (!access.ok) {
+        // Кнопка «📋 Меню» остаётся под полем ввода и после конца триала —
+        // молчать на неё нельзя, иначе бот выглядит сломанным.
+        if (access.reason === "expired") {
+          await ctx.reply(access.error);
+          return;
+        }
         await next(); // не владелец — для него это просто текст
         return;
       }
       pending.delete(userId);
       newPostDrafts.delete(userId);
-      await sendScreen(ctx, await renderMain({ ...deps, viewer }));
+      await sendScreen(ctx, await renderMain({ ...deps, viewer: access.viewer }));
       return;
     }
     const state = pending.get(userId);
@@ -278,13 +291,21 @@ export function createAdminComposer(deps: AdminBotDeps): Composer<Context> {
       await next();
       return;
     }
-    const viewer = await resolveMenuViewer(deps.prisma, userId);
-    if (viewer === null) {
-      pending.delete(userId); // владельца отозвали между вводами — режим сбрасываем
+    const access = await resolveMenuViewer(deps.prisma, userId, deps.adminId);
+    if (!access.ok) {
+      // Доступ отозвали или срок вышел между вводами — режим сбрасываем.
+      pending.delete(userId);
       await next();
       return;
     }
-    await handleInput(ctx, { ...deps, viewer }, pending, newPostDrafts, state, text);
+    await handleInput(
+      ctx,
+      { ...deps, viewer: access.viewer },
+      pending,
+      newPostDrafts,
+      state,
+      text,
+    );
   });
 
   // Фото в личке — только когда мастер «Новый пост» ждёт картинку (иначе дальше).
@@ -294,12 +315,13 @@ export function createAdminComposer(deps: AdminBotDeps): Composer<Context> {
       await next();
       return;
     }
-    const viewer = await resolveMenuViewer(deps.prisma, userId);
-    if (viewer === null) {
+    const access = await resolveMenuViewer(deps.prisma, userId, deps.adminId);
+    if (!access.ok) {
       pending.delete(userId);
       await next();
       return;
     }
+    const viewer = access.viewer;
     const draft = newPostDrafts.get(userId);
     if (draft === undefined) {
       pending.delete(userId);
@@ -321,10 +343,6 @@ export function createAdminComposer(deps: AdminBotDeps): Composer<Context> {
 
   return composer;
 }
-
-/** Отказ незарегистрированному пользователю (гейт 14b-1). */
-const MENU_DENIED_TEXT =
-  "Меню доступно владельцам каналов по приглашению. Попроси владельца бота пригласить тебя.";
 
 /** Текст шага «когда опубликовать» с поясом канала (Шаг 6c). */
 function dateTimePromptText(timezone: string | undefined): string {
@@ -495,6 +513,61 @@ async function routeCallback(
         text: removed
           ? `Доступ отозван: ${owner.name ?? owner.telegramUserId}`
           : "Владелец уже был удалён.",
+      });
+      return;
+    }
+
+    case "ownext":
+    case "ownact": {
+      // СРОК ДОСТУПА (14e): продлить триал / снять срок. Права — те же, что у
+      // отзыва (`canRevokeOwner`): управляет только супервладелец, и трогать
+      // самого супервладельца нельзя. Список берём свежий — индекс мог сдвинуться.
+      const idx = intArg(args, 0);
+      const owners = userId === deps.adminId ? await listOwners(deps.prisma) : [];
+      const owner = idx === null ? undefined : owners[idx];
+      if (owner === undefined) {
+        await ctx.answerCallbackQuery({
+          text:
+            userId === deps.adminId
+              ? "Владелец не найден — список обновился."
+              : REVOKE_DENIED_NOT_ADMIN,
+          show_alert: true,
+        });
+        if (userId === deps.adminId) {
+          await editScreen(ctx, await renderOwners(deps));
+        }
+        return;
+      }
+      const check = canRevokeOwner({
+        viewerUserId: userId,
+        adminId: deps.adminId,
+        targetTelegramUserId: owner.telegramUserId,
+      });
+      if (!check.ok) {
+        await ctx.answerCallbackQuery({ text: check.error, show_alert: true });
+        return;
+      }
+      const label = owner.name ?? owner.telegramUserId;
+      if (action === "ownact") {
+        await setOwnerPlanActive(deps.prisma, owner.id);
+        deps.logger.info(
+          { telegramUserId: owner.telegramUserId },
+          "срок доступа снят (бессрочно)",
+        );
+      } else {
+        const until = extendTrialUntil(owner.trialUntil, new Date());
+        await setOwnerTrial(deps.prisma, owner.id, until);
+        deps.logger.info(
+          { telegramUserId: owner.telegramUserId, until: until.toISOString() },
+          "триал продлён",
+        );
+      }
+      await editScreen(ctx, await renderOwners(deps));
+      await ctx.answerCallbackQuery({
+        text:
+          action === "ownact"
+            ? `Доступ без срока: ${label}`
+            : `Продлено на ${String(TRIAL_DAYS)} дней: ${label}`,
       });
       return;
     }
@@ -1644,11 +1717,27 @@ async function handleInput(
       return; // остаёмся в режиме ввода
     }
     const { telegramUserId, name } = result.value;
-    await ensureOwner(deps.prisma, telegramUserId, name ?? undefined);
+    const ownerId = await ensureOwner(
+      deps.prisma,
+      telegramUserId,
+      name ?? undefined,
+    );
+    // Триал (14e) — всем, кроме себя: супервладелец бессрочен, и случайное
+    // приглашение самого себя не должно поставить ему срок.
+    const isSelf = telegramUserId === deps.adminId;
+    if (!isSelf) {
+      await setOwnerTrial(deps.prisma, ownerId, trialExpiresAt(new Date()));
+    }
     pending.delete(deps.viewer.userId);
-    deps.logger.info({ telegramUserId, name }, "владелец приглашён");
+    deps.logger.info(
+      { telegramUserId, name, trialDays: isSelf ? null : TRIAL_DAYS },
+      "владелец приглашён",
+    );
     await ctx.reply(
       `✅ Владелец ${name ?? String(telegramUserId)} приглашён.\n` +
+        (isSelf
+          ? ""
+          : `Бесплатный доступ — ${String(TRIAL_DAYS)} дней; продлить или снять срок можно в «📡 Каналы» → «👤 Владельцы».\n`) +
         "Пусть откроет /menu у этого бота и добавит бота админом в свой канал — канал привяжется к нему автоматически.",
     );
     await sendScreen(ctx, await renderChannels(deps));

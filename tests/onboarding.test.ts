@@ -127,7 +127,14 @@ describe("композер онбординга: регистрирует кан
   }
 
   /** Прогоняет апдейт через композер с моками БД/API; возвращает моки для проверок. */
-  async function run(fromId: number): Promise<{
+  async function run(
+    fromId: number,
+    // Тариф владельца (14e): по умолчанию бессрочный — как строка, созданная до 14e.
+    plan: { plan: "trial" | "active"; trialUntil: Date | null } = {
+      plan: "active",
+      trialUntil: null,
+    },
+  ): Promise<{
     findFirst: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
     sendMessage: ReturnType<typeof vi.fn>;
@@ -137,7 +144,12 @@ describe("композер онбординга: регистрирует кан
       ({ where }: { where: { telegramUserId: string } }) =>
         Promise.resolve(
           where.telegramUserId === String(OWNER_TG_ID)
-            ? { id: OWNER_ROW_ID, telegramUserId: where.telegramUserId, name: null }
+            ? {
+                id: OWNER_ROW_ID,
+                telegramUserId: where.telegramUserId,
+                name: null,
+                ...plan,
+              }
             : null,
         ),
     );
@@ -150,6 +162,7 @@ describe("композер онбординга: регистрирует кан
         channel: { findFirst, create },
       } as never,
       logger: silentLogger,
+      adminId: 7035079048, // супервладелец — не OWNER_TG_ID
     });
     const ctx = new Context(
       promotedUpdate(fromId),
@@ -168,6 +181,23 @@ describe("композер онбординга: регистрирует кан
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0][0]).toBe(OWNER_TG_ID);
     expect(String(sendMessage.mock.calls[0][1])).toContain("подключён");
+  });
+
+  it("владелец с истёкшим триалом → канал НЕ регистрируется (обход гейта 14e)", async () => {
+    const { create, sendMessage } = await run(OWNER_TG_ID, {
+      plan: "trial",
+      trialUntil: new Date(Date.now() - 60_000),
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("владелец с действующим триалом подключает канал как обычно", async () => {
+    const { create } = await run(OWNER_TG_ID, {
+      plan: "trial",
+      trialUntil: new Date(Date.now() + 60_000),
+    });
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("незарегистрированный человек добавил бота → игнор: ни записи в БД, ни DM", async () => {

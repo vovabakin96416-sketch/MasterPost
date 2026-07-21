@@ -1,3 +1,4 @@
+import type { OwnerPlanKind } from "../../core/menu/ownerPlan.js";
 import type { PrismaClient } from "../client.js";
 
 /**
@@ -11,12 +12,25 @@ import type { PrismaClient } from "../client.js";
  * разграничение доступа включается в 14b.
  */
 
-/** Владелец в форме, нужной гейту доступа и экрану «Владельцы» (14b). */
+/** Владелец в форме, нужной гейту доступа и экрану «Владельцы» (14b, 14e). */
 export interface OwnerRecord {
   id: string;
   telegramUserId: string;
   name: string | null;
+  /** Тариф (14e): `trial` — доступ до `trialUntil`, `active` — бессрочно. */
+  plan: OwnerPlanKind;
+  /** Конец бесплатного доступа (14e); `null` — срок не задан. */
+  trialUntil: Date | null;
 }
+
+/** Поля тарифа во всех выборках владельца — чтобы гейт везде получал одно и то же. */
+const OWNER_SELECT = {
+  id: true,
+  telegramUserId: true,
+  name: true,
+  plan: true,
+  trialUntil: true,
+} as const;
 
 /**
  * Идемпотентно заводит владельца по его Telegram user id и возвращает id строки.
@@ -48,7 +62,39 @@ export async function findOwnerByTelegramId(
 ): Promise<OwnerRecord | null> {
   return prisma.owner.findUnique({
     where: { telegramUserId: String(telegramUserId) },
-    select: { id: true, telegramUserId: true, name: true },
+    select: OWNER_SELECT,
+  });
+}
+
+/**
+ * ТРИАЛ (Шаг 14e): ставит владельцу тариф `trial` со сроком. Используется
+ * приглашением (14b-1) и кнопкой продления на экране «👤 Владельцы».
+ *
+ * Срок считает ЯДРО (`trialExpiresAt` / `extendTrialUntil`) — репозиторий только
+ * пишет готовую дату, чтобы правила продления жили в одном тестируемом месте.
+ */
+export async function setOwnerTrial(
+  prisma: PrismaClient,
+  ownerId: string,
+  trialUntil: Date,
+): Promise<void> {
+  await prisma.owner.update({
+    where: { id: ownerId },
+    data: { plan: "trial", trialUntil },
+  });
+}
+
+/**
+ * БЕССРОЧНЫЙ ДОСТУП (Шаг 14e): снимает срок (`plan=active`, `trialUntil=null`) —
+ * тестер стал постоянным владельцем. Обратный переход — `setOwnerTrial`.
+ */
+export async function setOwnerPlanActive(
+  prisma: PrismaClient,
+  ownerId: string,
+): Promise<void> {
+  await prisma.owner.update({
+    where: { id: ownerId },
+    data: { plan: "active", trialUntil: null },
   });
 }
 
@@ -70,18 +116,11 @@ export async function listOwners(
 ): Promise<OwnerListEntry[]> {
   const rows = await prisma.owner.findMany({
     orderBy: { createdAt: "asc" },
-    select: {
-      id: true,
-      telegramUserId: true,
-      name: true,
-      _count: { select: { channels: true } },
-    },
+    select: { ...OWNER_SELECT, _count: { select: { channels: true } } },
   });
-  return rows.map((r) => ({
-    id: r.id,
-    telegramUserId: r.telegramUserId,
-    name: r.name,
-    channelCount: r._count.channels,
+  return rows.map(({ _count, ...owner }) => ({
+    ...owner,
+    channelCount: _count.channels,
   }));
 }
 

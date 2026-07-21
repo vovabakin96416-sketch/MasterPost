@@ -55,17 +55,27 @@ enum ExperimentStatus {
   stopped
 }
 
+// Тариф владельца (Шаг 14e). `trial` — бесплатный доступ до `trialUntil`, после
+// которого гейт закрывается сам; `active` — бессрочно (супервладелец, платящий).
+// ⚠️ Дефолт `active` НАМЕРЕННО: миграция не должна запереть тех, кто уже пользуется
+// ботом (в т.ч. супервладельца). Триал ставится явно — приглашением.
+enum OwnerPlan {
+  trial
+  active
+}
+
 // Владелец каналов (Шаг 14a) — арендатор SaaS. Фундамент мультитенанта: до 14a бот
 // одно-арендный (единственный ADMIN_ID), и каналы никому не «принадлежали».
 // Супервладелец (= ADMIN_ID) заводится идемпотентно при старте (`ensureOwner`).
-// Поля тарифа/триала (plan, trialEndsAt) сознательно отложены на 14e — здесь только
-// личность владельца. Разграничение доступа по владельцу включается в 14b.
+// Разграничение доступа по владельцу включено в 14b, срок доступа — в 14e.
 model Owner {
-  id             String   @id @default(cuid())
-  telegramUserId String   @unique // числовой Telegram user id (строкой — как chatId)
+  id             String    @id @default(cuid())
+  telegramUserId String    @unique // числовой Telegram user id (строкой — как chatId)
   name           String? // отображаемое имя для экрана «Владельцы» (14b)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  plan           OwnerPlan @default(active) // тариф (14e)
+  trialUntil     DateTime? // конец бесплатного доступа; null при plan=active (14e)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   channels Channel[]
 }

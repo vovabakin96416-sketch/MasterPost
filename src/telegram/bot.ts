@@ -8,6 +8,10 @@ import { createApprovalComposer } from "./features/approval/index.js";
 import { createPostButtonsComposer } from "./features/postButtons/index.js";
 import { createOnboardingComposer } from "./features/onboarding/index.js";
 import { findOwnerByTelegramId } from "../db/repositories/ownerRepository.js";
+import {
+  ACCESS_DENIED_TRIAL_EXPIRED,
+  checkOwnerRecordAccess,
+} from "../core/menu/ownerPlan.js";
 import type { CommentDeps } from "./features/comments/types.js";
 import type { MtprotoConfig } from "../services/analytics/mtprotoConfig.js";
 
@@ -34,10 +38,19 @@ export function createBot(token: string, deps: BotDeps): Bot {
   bot.command("start", async (ctx) => {
     // Зарегистрированному владельцу (гейт 14b-1 — таблица `Owner`, супервладелец
     // заведён на старте) сразу даём постоянную кнопку «📋 Меню» под полем ввода.
+    // С 14e кнопку получает только тот, у кого доступ ещё действует: кнопка,
+    // которая не открывает меню, хуже её отсутствия.
     const owner =
       ctx.from === undefined
         ? null
         : await findOwnerByTelegramId(deps.prisma, ctx.from.id);
+    if (
+      owner !== null &&
+      !checkOwnerRecordAccess(owner, deps.adminId, new Date()).ok
+    ) {
+      await ctx.reply(ACCESS_DENIED_TRIAL_EXPIRED);
+      return;
+    }
     if (owner !== null) {
       await ctx.reply(
         "Привет! Я MasterPost — бот-управитель каналов.\nВнизу кнопка «📋 Меню» — нажми, чтобы открыть управление.",

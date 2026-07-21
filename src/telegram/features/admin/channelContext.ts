@@ -1,4 +1,5 @@
 import { pickSelectedId } from "../../../core/menu/selectChannel.js";
+import { checkOwnerRecordAccess } from "../../../core/menu/ownerPlan.js";
 import {
   getChannelById,
   getPostingChannelById,
@@ -29,17 +30,41 @@ import type { AdminDeps, MenuViewer } from "./types.js";
 
 const selected = new Map<number, string>();
 
+/** Отказ незарегистрированному пользователю (гейт 14b-1). */
+export const MENU_DENIED_TEXT =
+  "Меню доступно владельцам каналов по приглашению. Попроси владельца бота пригласить тебя.";
+
 /**
- * Гейт меню (Шаг 14b-1): пользователь Telegram → зарегистрированный владелец, или
- * `null` (не приглашён — меню закрыто). Супервладелец зарегистрирован всегда
- * (`ensureOwner(ADMIN_ID)` на старте, 14a).
+ * Гейт меню (Шаг 14b-1 + срок доступа 14e): пользователь Telegram → владелец,
+ * прошедший проверку, либо отказ с причиной.
+ *
+ * Причин две, и они разные для человека: «не приглашён» (14b-1) и «бесплатный
+ * доступ закончился» (14e) — второму надо сказать, что делать дальше, а не
+ * молчать. Супервладелец зарегистрирован всегда (`ensureOwner(ADMIN_ID)` на
+ * старте, 14a) и сроком не ограничен.
  */
+export type MenuAccess =
+  | { readonly ok: true; readonly viewer: MenuViewer }
+  | {
+      readonly ok: false;
+      /** `not_invited` — постороннему; `expired` — своему, у кого вышел срок. */
+      readonly reason: "not_invited" | "expired";
+      readonly error: string;
+    };
+
 export async function resolveMenuViewer(
   prisma: PrismaClient,
   userId: number,
-): Promise<MenuViewer | null> {
+  adminId: number,
+): Promise<MenuAccess> {
   const owner = await findOwnerByTelegramId(prisma, userId);
-  return owner === null ? null : { userId, ownerId: owner.id };
+  if (owner === null) {
+    return { ok: false, reason: "not_invited", error: MENU_DENIED_TEXT };
+  }
+  const access = checkOwnerRecordAccess(owner, adminId, new Date());
+  return access.ok
+    ? { ok: true, viewer: { userId, ownerId: owner.id } }
+    : { ok: false, reason: "expired", error: access.error };
 }
 
 /** Запоминает выбранный пользователем канал (после переключения в меню). */

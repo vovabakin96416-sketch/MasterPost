@@ -11,11 +11,14 @@ import {
   registerChannelFromOnboarding,
 } from "../../../db/repositories/channelRepository.js";
 import { findOwnerByTelegramId } from "../../../db/repositories/ownerRepository.js";
+import { checkOwnerRecordAccess } from "../../../core/menu/ownerPlan.js";
 
 /** Зависимости онбординга: БД (гейт владельцев + регистрация канала) и лог. */
 export interface OnboardingDeps {
   prisma: PrismaClient;
   logger: Logger;
+  /** Супервладелец (`ADMIN_ID`) — его срок доступа не ограничивает (14e). */
+  adminId: number;
 }
 
 /**
@@ -56,6 +59,15 @@ export function createOnboardingComposer(deps: OnboardingDeps): Composer<Context
         deps.logger.warn(
           { chatId: chat.id, title, byUserId: upd.from.id },
           "онбординг: бота добавил незарегистрированный пользователь — игнорирую",
+        );
+        return;
+      }
+      // Срок доступа (14e): иначе триал обходился бы в обход меню — добавил бота
+      // админом в новый канал и продолжил пользоваться ботом бесплатно.
+      if (!checkOwnerRecordAccess(owner, deps.adminId, new Date()).ok) {
+        deps.logger.warn(
+          { chatId: chat.id, title, byUserId: upd.from.id },
+          "онбординг: у владельца закончился доступ — канал не регистрирую",
         );
         return;
       }
