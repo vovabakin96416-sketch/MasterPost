@@ -22,6 +22,10 @@ export interface BotDeps extends CommentDeps {
   anthropicApiKey: string | undefined; // Шаг 10b: AI-генерация постов (кнопка «🤖 AI-пост»)
   timeoutMs?: number | undefined; // Шаг 11b: таймаут вызова Claude (мс); undefined → дефолт
   telemetrApiKey: string | undefined; // Шаг 12e: рыночные данные (секция «🌍 Рынок»)
+  // Шаг 14b-bis-1: ключ шифрования bot-токенов клиентов + id общего бота (его
+  // подключать себе нельзя). Без ключа экран «🤖 Мой бот» отключён.
+  botTokenEncKey: string | undefined;
+  mainBotUserId: string | undefined;
   mtproto: MtprotoConfig;
 }
 

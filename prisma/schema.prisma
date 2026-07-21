@@ -77,7 +77,36 @@ model Owner {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  channels Channel[]
+  channels   Channel[]
+  botAccount BotAccount?
+}
+
+// Свой бот-токен владельца (Шаг 14b-bis-1) — «лицо» клиента: его канал ведёт ЕГО
+// бот, а не общий @MasterPost. Отдельная модель, а не поле на `Owner`, потому что у
+// токена своя жизнь: имя бота, работоспособность, последняя ошибка, дата подключения.
+//
+// ⚠️ ТОКЕН = ПОЛНЫЙ КОНТРОЛЬ над каналами клиента, поэтому в БД он лежит ТОЛЬКО
+// зашифрованным (`tokenCipher`, AES-256-GCM, ключ в env `BOT_TOKEN_ENC_KEY`) —
+// утёкший дамп базы не даёт доступа к чужим каналам.
+//
+// `@unique` на `ownerId` — один бот на владельца (мультибот на одного клиента не
+// нужен и усложнил бы маршрутизацию). `@unique` на `botUserId` — один и тот же бот
+// нельзя подключить двум владельцам: два long polling на один токен дают 409.
+//
+// ⚠️ В 14b-bis-1 токен ТОЛЬКО хранится и проверяется (`getMe`): процесс по-прежнему
+// поднимает один бот из env. Запуск ботов клиентов — 14b-bis-2, маршрутизация
+// публикации — 14b-bis-3.
+model BotAccount {
+  id          String   @id @default(cuid())
+  ownerId     String   @unique
+  owner       Owner    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  botUserId   String   @unique // числовой id бота из getMe (строкой — как chatId)
+  username    String // @username бота: единственное, что показываем владельцу
+  tokenCipher String // зашифрованный токен (формат `v1:iv:tag:ciphertext`)
+  isActive    Boolean  @default(true) // выключён владельцем — не поднимать (14b-bis-2)
+  lastError   String? // последняя ошибка запуска/getMe — чтобы молчащий бот был объясним
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // Канал — корень всех данных. Хранит тематику и настройки, не код.

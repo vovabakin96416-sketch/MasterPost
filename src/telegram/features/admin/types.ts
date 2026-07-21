@@ -40,6 +40,11 @@ export interface AdminBotDeps {
   // Шаг 12e: ключ Telemetr для секции «🌍 Рынок» на экране «📈 Рост».
   // undefined → секции просто нет (мягкая деградация, как pexelsApiKey).
   telemetrApiKey: string | undefined;
+  // Шаг 14b-bis-1: свой бот клиента. `botTokenEncKey` — ключ шифрования токена в БД
+  // (undefined → экран «🤖 Мой бот» честно говорит «не настроено», как без ключа
+  // Pexels); `mainBotUserId` — id общего бота, его подключить себе нельзя (409).
+  botTokenEncKey: string | undefined;
+  mainBotUserId: string | undefined;
   // Шаг 7b: только для строки статуса в «📊 Аналитика». Это ЧИСТЫЙ конфиг (без GramJS) —
   // меню не тянет тяжёлый mtprotoClient в импорт-граф запущенного бота.
   mtproto: MtprotoConfig;
@@ -88,6 +93,8 @@ export type PendingInput =
   | { readonly kind: "vetChannel" }
   // Шаг 14b-1 — приглашение владельца (только супервладелец): Telegram user id + опц. имя.
   | { readonly kind: "inviteOwner" }
+  // Шаг 14b-bis-1 — свой бот клиента: токен от @BotFather.
+  | { readonly kind: "setBotToken" }
   | {
       readonly kind: "editPostField";
       readonly field: "title" | "text" | "cta";

@@ -72,6 +72,11 @@ async function main(): Promise<void> {
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     timeoutMs: env.AI_TIMEOUT_MS,
     telemetrApiKey: env.TELEMETR_API_KEY,
+    // Шаг 14b-bis-1: свой бот клиента. Id общего бота берём из префикса его же
+    // токена (`<id>:<секрет>`) — без сетевого вызова на старте; сам токен дальше
+    // env не уходит.
+    botTokenEncKey: env.BOT_TOKEN_ENC_KEY,
+    mainBotUserId: env.BOT_TOKEN.split(":")[0],
     mtproto,
   });
 

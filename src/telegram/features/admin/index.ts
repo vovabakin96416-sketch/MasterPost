@@ -96,6 +96,8 @@ import {
   setOwnerPlanActive,
   setOwnerTrial,
 } from "../../../db/repositories/ownerRepository.js";
+import { removeBotAccount } from "../../../db/repositories/botAccountRepository.js";
+import { connectBotAccount } from "../../../services/botAccountService.js";
 import {
   extendTrialUntil,
   trialExpiresAt,
@@ -119,6 +121,9 @@ import {
   renderAddAnswerPrompt,
   renderAddChannelPrompt,
   renderInviteOwnerPrompt,
+  renderBotAccount,
+  renderBotTokenPrompt,
+  renderBotDisconnectConfirm,
   renderOwners,
   renderOwnerRevokeConfirm,
   renderChannels,
@@ -436,6 +441,44 @@ async function routeCallback(
       await editScreen(ctx, renderInviteOwnerPrompt());
       await ctx.answerCallbackQuery();
       return;
+
+    // ——— Свой бот клиента (Шаг 14b-bis-1) ———
+    // Гейта супервладельца тут нет намеренно: свой бот — это личная настройка
+    // КАЖДОГО владельца, и всё внутри скоупится по `deps.viewer.ownerId`.
+    case "bot":
+      await editScreen(ctx, await renderBotAccount(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "bottok":
+      if (deps.botTokenEncKey === undefined) {
+        await ctx.answerCallbackQuery({
+          text: "Подключение своего бота не настроено (нет BOT_TOKEN_ENC_KEY).",
+          show_alert: true,
+        });
+        return;
+      }
+      pending.set(userId, { kind: "setBotToken" });
+      await editScreen(ctx, renderBotTokenPrompt());
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "botdel":
+      await editScreen(ctx, await renderBotDisconnectConfirm(deps));
+      await ctx.answerCallbackQuery();
+      return;
+
+    case "botdely": {
+      const removed = await removeBotAccount(deps.prisma, deps.viewer.ownerId);
+      if (removed) {
+        deps.logger.info({ ownerId: deps.viewer.ownerId }, "бот владельца отключён");
+      }
+      await editScreen(ctx, await renderBotAccount(deps));
+      await ctx.answerCallbackQuery({
+        text: removed ? "Бот отключён." : "Бот уже был отключён.",
+      });
+      return;
+    }
 
     case "own": {
       // Список владельцев (14b-4) — только супервладелец (кнопку видит только он,
@@ -1741,6 +1784,69 @@ async function handleInput(
         "Пусть откроет /menu у этого бота и добавит бота админом в свой канал — канал привяжется к нему автоматически.",
     );
     await sendScreen(ctx, await renderChannels(deps));
+    return;
+  }
+
+  // Свой бот клиента (Шаг 14b-bis-1) не зависит от выбранного канала — обрабатываем
+  // до проверки на наличие текущего, как приглашение владельца.
+  if (state.kind === "setBotToken") {
+    // 🔒 СНАЧАЛА убираем сообщение с токеном из чата, потом всё остальное: секрет
+    // не должен остаться в истории, даже если проверка ниже упадёт. Бот вправе
+    // удалять входящие сообщения в личке; не вышло (нет права/старое сообщение) —
+    // честно предупреждаем владельца, чтобы он стёр его сам.
+    let tokenErased = true;
+    try {
+      await ctx.deleteMessage();
+    } catch {
+      tokenErased = false;
+    }
+
+    const outcome = await connectBotAccount(deps, deps.viewer.ownerId, text);
+    switch (outcome.kind) {
+      case "bad_format":
+        // Остаёмся в режиме ввода: опечатка — самый частый исход, гонять владельца
+        // по меню заново незачем.
+        await ctx.reply(`⚠️ ${outcome.error}`);
+        return;
+      case "no_key":
+        pending.delete(deps.viewer.userId);
+        await ctx.reply(
+          "⚠️ Подключение своего бота не настроено (нет ключа шифрования). Токен НЕ сохранён.",
+        );
+        break;
+      case "main_bot":
+        pending.delete(deps.viewer.userId);
+        await ctx.reply(
+          "⚠️ Это токен общего бота — его подключить нельзя. Создай своего в @BotFather (/newbot) и пришли его токен.",
+        );
+        break;
+      case "invalid_token":
+        pending.delete(deps.viewer.userId);
+        await ctx.reply(
+          "⚠️ Telegram не принял этот токен. Проверь, что он скопирован целиком и не отозван в @BotFather (/mybots → Revoke).",
+        );
+        break;
+      case "taken":
+        pending.delete(deps.viewer.userId);
+        await ctx.reply(
+          "⚠️ Этот бот уже подключён другим владельцем. Один бот нельзя вести из двух аккаунтов — создай отдельного в @BotFather.",
+        );
+        break;
+      case "ok":
+        pending.delete(deps.viewer.userId);
+        await ctx.reply(
+          `✅ Бот @${outcome.account.username} подключён.\n` +
+            (tokenErased
+              ? ""
+              : "⚠️ Не смог удалить сообщение с токеном — сотри его сам.\n") +
+            "Дальше: добавь @" +
+            outcome.account.username +
+            " админом в свой канал с правом «Публиковать сообщения».\n" +
+            "ℹ️ Публиковать через него бот начнёт следующим обновлением — сейчас каналы ведёт общий бот.",
+        );
+        break;
+    }
+    await sendScreen(ctx, await renderBotAccount(deps));
     return;
   }
 

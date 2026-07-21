@@ -3,6 +3,7 @@ import { paginate } from "../../../core/menu/paginate.js";
 import { canRevokeOwner } from "../../../core/menu/ownerAccess.js";
 import { formatOwnerPlan, TRIAL_DAYS } from "../../../core/menu/ownerPlan.js";
 import { listOwners } from "../../../db/repositories/ownerRepository.js";
+import { getBotAccountByOwner } from "../../../db/repositories/botAccountRepository.js";
 import { poolHealth, poolAgeDays } from "../../../core/content/poolHealth.js";
 import { getChannelDisplay } from "../../../db/repositories/channelRepository.js";
 import {
@@ -250,6 +251,9 @@ export async function renderChannels(deps: AdminDeps): Promise<Screen> {
     ];
   });
   rows.push([{ label: "➕ Добавить канал", data: encodeCb("chadd") }]);
+  // Свой бот клиента (Шаг 14b-bis-1) — у каждого владельца свой, поэтому кнопка
+  // не служебная и видна всем.
+  rows.push([{ label: "🤖 Мой бот", data: encodeCb("bot") }]);
   // Приглашение владельцев (Шаг 14b-1) и их список с отзывом доступа (14b-4) —
   // служебные функции супервладельца: остальные видят только свои каналы.
   if (deps.viewer.userId === deps.adminId) {
@@ -337,6 +341,102 @@ export function renderInviteOwnerPrompt(): Screen {
       "Id — число; человек может узнать его, написав /start боту @userinfobot.\n" +
       "После приглашения владелец открывает /menu у этого бота и добавляет бота админом в свой канал.",
     keyboard: buildKeyboard([navRow(encodeCb("ch"))]),
+  };
+}
+
+/**
+ * Экран «🤖 Мой бот» (Шаг 14b-bis-1) — свой бот клиента вместо общего.
+ *
+ * ⚠️ ЧЕСТНОСТЬ ЭКРАНА: на этом подшаге токен только сохраняется и проверяется —
+ * процесс по-прежнему поднимает один общий бот. Экран говорит это прямо, иначе
+ * владелец подключит бота и будет ждать от него постов, которых не будет.
+ */
+export async function renderBotAccount(deps: AdminDeps): Promise<Screen> {
+  const rows: Btn[][] = [];
+  const lines = ["🤖 Мой бот", ""];
+
+  if (deps.botTokenEncKey === undefined) {
+    // Без ключа шифрования хранить токен негде: класть секрет в базу открытым —
+    // не тот компромисс, о котором можно молча договориться с владельцем.
+    lines.push(
+      "Подключение своего бота недоступно: не настроен ключ шифрования (BOT_TOKEN_ENC_KEY).",
+      "",
+      "Токен бота даёт полный доступ к твоим каналам, поэтому бот хранит его только зашифрованным — без ключа он не примет токен вообще.",
+    );
+    rows.push(navRow(encodeCb("ch")));
+    return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+  }
+
+  const account = await getBotAccountByOwner(deps.prisma, deps.viewer.ownerId);
+  if (account === null) {
+    lines.push(
+      "Сейчас твои каналы ведёт общий бот.",
+      "Можно подключить своего: подписчики будут видеть твоё имя и аватар, а не чужие.",
+      "",
+      "Как получить токен:",
+      "1. Написать @BotFather → /newbot → задать имя и @username.",
+      "2. Скопировать выданный токен и прислать его сюда одним сообщением.",
+      "3. Добавить нового бота админом в свой канал (право «Публиковать сообщения»).",
+      "",
+      "🔒 Токен хранится зашифрованным, сообщение с ним бот удалит из чата сразу после проверки.",
+      "",
+      "ℹ️ Пока бот только сохраняет и проверяет токен. Публиковать через твоего бота он начнёт следующим обновлением.",
+    );
+    rows.push([{ label: "🔑 Подключить своего бота", data: encodeCb("bottok") }]);
+    rows.push(navRow(encodeCb("ch")));
+    return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+  }
+
+  lines.push(
+    `Подключён: @${account.username}`,
+    `id бота: ${account.botUserId}`,
+    account.lastError === null
+      ? "Состояние: токен принят Telegram ✅"
+      : `Состояние: последняя ошибка — ${account.lastError} ⚠️`,
+    "",
+    "Проверь, что этот бот добавлен админом в твой канал с правом «Публиковать сообщения».",
+    "",
+    "ℹ️ Пока публикацию ведёт общий бот. Переключение на твоего — следующим обновлением.",
+  );
+  rows.push([{ label: "🔁 Заменить токен", data: encodeCb("bottok") }]);
+  rows.push([{ label: "🚫 Отключить бота", data: encodeCb("botdel") }]);
+  rows.push(navRow(encodeCb("ch")));
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/** Экран ожидания токена (Шаг 14b-bis-1). */
+export function renderBotTokenPrompt(): Screen {
+  return {
+    text:
+      "🔑 Токен бота\n\n" +
+      "Пришли токен от @BotFather одним сообщением — он выглядит так:\n" +
+      "8123456789:AAE_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n" +
+      "🔒 Сообщение с токеном бот удалит сразу после проверки, а сам токен сохранит зашифрованным.\n" +
+      "Токен общего бота подключить нельзя — нужен именно твой, созданный в @BotFather.",
+    keyboard: buildKeyboard([navRow(encodeCb("bot"))]),
+  };
+}
+
+/**
+ * Подтверждение отключения своего бота (Шаг 14b-bis-1): токен удаляется из БД
+ * безвозвратно, поэтому спрашиваем отдельным экраном — как при отзыве доступа.
+ */
+export async function renderBotDisconnectConfirm(
+  deps: AdminDeps,
+): Promise<Screen> {
+  const account = await getBotAccountByOwner(deps.prisma, deps.viewer.ownerId);
+  if (account === null) {
+    return renderBotAccount(deps);
+  }
+  return {
+    text:
+      `🚫 Отключить @${account.username}?\n\n` +
+      "Токен будет удалён из базы. Каналы, посты и настройки останутся на месте — их снова будет вести общий бот.\n" +
+      "Подключить обратно можно в любой момент: токен в @BotFather не меняется.",
+    keyboard: buildKeyboard([
+      [{ label: "🚫 Да, отключить", data: encodeCb("botdely") }],
+      navRow(encodeCb("bot")),
+    ]),
   };
 }
 
