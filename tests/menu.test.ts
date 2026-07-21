@@ -8,6 +8,11 @@ import {
 } from "../src/core/menu/callbackData";
 import { paginate } from "../src/core/menu/paginate";
 import {
+  canRevokeOwner,
+  REVOKE_DENIED_NOT_ADMIN,
+  REVOKE_DENIED_SELF,
+} from "../src/core/menu/ownerAccess";
+import {
   MAX_ANSWER_LENGTH,
   MAX_DAILY_CAP,
   MAX_OWNER_NAME_LENGTH,
@@ -231,6 +236,48 @@ describe("validateOwnerInvite (приглашение владельца, Шаг
     expect(validateOwnerInvite("1".repeat(16)).ok).toBe(false);
     expect(
       validateOwnerInvite(`123 ${"а".repeat(MAX_OWNER_NAME_LENGTH + 1)}`).ok,
+    ).toBe(false);
+  });
+});
+
+describe("canRevokeOwner (отзыв доступа, Шаг 14b-4)", () => {
+  const adminId = 7035079048;
+
+  it("супервладелец отзывает доступ у постороннего владельца", () => {
+    expect(
+      canRevokeOwner({
+        viewerUserId: adminId,
+        adminId,
+        targetTelegramUserId: "123456789",
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("не супервладелец не управляет доступом (крафтнутый callback)", () => {
+    expect(
+      canRevokeOwner({
+        viewerUserId: 123456789,
+        adminId,
+        targetTelegramUserId: "555",
+      }),
+    ).toEqual({ ok: false, error: REVOKE_DENIED_NOT_ADMIN });
+  });
+
+  it("супервладельца (себя) отозвать нельзя — бот останется без хозяина", () => {
+    expect(
+      canRevokeOwner({
+        viewerUserId: adminId,
+        adminId,
+        targetTelegramUserId: String(adminId),
+      }),
+    ).toEqual({ ok: false, error: REVOKE_DENIED_SELF });
+    // id в БД хранится строкой — пробелы вокруг не должны обходить запрет
+    expect(
+      canRevokeOwner({
+        viewerUserId: adminId,
+        adminId,
+        targetTelegramUserId: ` ${String(adminId)} `,
+      }).ok,
     ).toBe(false);
   });
 });

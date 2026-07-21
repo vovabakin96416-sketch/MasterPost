@@ -19,3 +19,6 @@ src/generated/
 Thumbs.db
 
 /src/generated/prisma
+
+# Одноразовые проверочные скрипты сессий (verify*.tmp.ts) — вне git
+scripts/*.tmp.ts

@@ -16,6 +16,10 @@ import {
   validateTriggerWord,
 } from "../../../core/menu/validation.js";
 import {
+  canRevokeOwner,
+  REVOKE_DENIED_NOT_ADMIN,
+} from "../../../core/menu/ownerAccess.js";
+import {
   addTime,
   removeTimeAt,
   toggleAutopost,
@@ -85,7 +89,11 @@ import {
   resolveSelectedChannel,
   setSelectedChannel,
 } from "./channelContext.js";
-import { ensureOwner } from "../../../db/repositories/ownerRepository.js";
+import {
+  ensureOwner,
+  listOwners,
+  removeOwner,
+} from "../../../db/repositories/ownerRepository.js";
 import {
   addText,
   getTextPool,
@@ -104,6 +112,8 @@ import {
   renderAddAnswerPrompt,
   renderAddChannelPrompt,
   renderInviteOwnerPrompt,
+  renderOwners,
+  renderOwnerRevokeConfirm,
   renderChannels,
   renderChannelDetail,
   renderRightsCheck,
@@ -408,6 +418,86 @@ async function routeCallback(
       await editScreen(ctx, renderInviteOwnerPrompt());
       await ctx.answerCallbackQuery();
       return;
+
+    case "own": {
+      // Список владельцев (14b-4) — только супервладелец (кнопку видит только он,
+      // но callback можно скрафтить).
+      if (userId !== deps.adminId) {
+        await ctx.answerCallbackQuery({
+          text: REVOKE_DENIED_NOT_ADMIN,
+          show_alert: true,
+        });
+        return;
+      }
+      await editScreen(ctx, await renderOwners(deps));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "ownrm": {
+      // Подтверждение отзыва: гейт супервладельца — внутри экрана (`canRevokeOwner`),
+      // здесь отсекаем чужих до обращения к БД.
+      if (userId !== deps.adminId) {
+        await ctx.answerCallbackQuery({
+          text: REVOKE_DENIED_NOT_ADMIN,
+          show_alert: true,
+        });
+        return;
+      }
+      const idx = intArg(args, 0);
+      if (idx === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      await editScreen(ctx, await renderOwnerRevokeConfirm(deps, idx));
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    case "ownrmy": {
+      // САМ ОТЗЫВ (14b-4). Права перепроверяем ЗДЕСЬ по свежему списку, а не
+      // полагаемся на отрисовку подтверждения: между экраном и нажатием список
+      // мог измениться, а callback — быть скрафчен.
+      const idx = intArg(args, 0);
+      const owners = userId === deps.adminId ? await listOwners(deps.prisma) : [];
+      const owner = idx === null ? undefined : owners[idx];
+      if (owner === undefined) {
+        await ctx.answerCallbackQuery({
+          text:
+            userId === deps.adminId
+              ? "Владелец не найден — список обновился."
+              : REVOKE_DENIED_NOT_ADMIN,
+          show_alert: true,
+        });
+        if (userId === deps.adminId) {
+          await editScreen(ctx, await renderOwners(deps));
+        }
+        return;
+      }
+      const check = canRevokeOwner({
+        viewerUserId: userId,
+        adminId: deps.adminId,
+        targetTelegramUserId: owner.telegramUserId,
+      });
+      if (!check.ok) {
+        await ctx.answerCallbackQuery({ text: check.error, show_alert: true });
+        return;
+      }
+      const removed = await removeOwner(deps.prisma, owner.id);
+      if (removed) {
+        deps.logger.info(
+          { telegramUserId: owner.telegramUserId, channels: owner.channelCount },
+          "доступ владельца отозван",
+        );
+      }
+      await editScreen(ctx, await renderOwners(deps));
+      await ctx.answerCallbackQuery({
+        text: removed
+          ? `Доступ отозван: ${owner.name ?? owner.telegramUserId}`
+          : "Владелец уже был удалён.",
+      });
+      return;
+    }
 
     case "chd": {
       const idx = intArg(args, 0);

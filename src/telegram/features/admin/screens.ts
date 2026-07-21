@@ -1,5 +1,7 @@
 import { encodeCb } from "../../../core/menu/callbackData.js";
 import { paginate } from "../../../core/menu/paginate.js";
+import { canRevokeOwner } from "../../../core/menu/ownerAccess.js";
+import { listOwners } from "../../../db/repositories/ownerRepository.js";
 import { poolHealth, poolAgeDays } from "../../../core/content/poolHealth.js";
 import { getChannelDisplay } from "../../../db/repositories/channelRepository.js";
 import {
@@ -247,10 +249,11 @@ export async function renderChannels(deps: AdminDeps): Promise<Screen> {
     ];
   });
   rows.push([{ label: "➕ Добавить канал", data: encodeCb("chadd") }]);
-  // Приглашение владельцев (Шаг 14b-1) — служебная функция супервладельца:
-  // остальные видят только свои каналы, без управления доступом.
+  // Приглашение владельцев (Шаг 14b-1) и их список с отзывом доступа (14b-4) —
+  // служебные функции супервладельца: остальные видят только свои каналы.
   if (deps.viewer.userId === deps.adminId) {
     rows.push([{ label: "➕ Пригласить владельца", data: encodeCb("invown") }]);
+    rows.push([{ label: "👤 Владельцы", data: encodeCb("own") }]);
   }
   rows.push(navRow());
 
@@ -333,6 +336,89 @@ export function renderInviteOwnerPrompt(): Screen {
       "Id — число; человек может узнать его, написав /start боту @userinfobot.\n" +
       "После приглашения владелец открывает /menu у этого бота и добавляет бота админом в свой канал.",
     keyboard: buildKeyboard([navRow(encodeCb("ch"))]),
+  };
+}
+
+/**
+ * Экран «👤 Владельцы» (Шаг 14b-4) — кто имеет доступ к боту + отзыв доступа.
+ * Только супервладелец (кнопку рисует `renderChannels`, callback перепроверяет
+ * роутер). Владелец адресуется ИНДЕКСОМ в списке `listOwners` — детерминированный
+ * порядок задаёт репозиторий.
+ */
+export async function renderOwners(deps: AdminDeps): Promise<Screen> {
+  const owners = await listOwners(deps.prisma);
+  const rows: Btn[][] = [];
+  const lines = ["👤 Владельцы", ""];
+
+  owners.forEach((o, i) => {
+    const isAdmin = o.telegramUserId === String(deps.adminId);
+    const label = o.name ?? `id ${o.telegramUserId}`;
+    const channels = `${String(o.channelCount)} ${pluralRu(o.channelCount, ["канал", "канала", "каналов"])}`;
+    lines.push(
+      `${isAdmin ? "👑" : "👤"} ${label} · id ${o.telegramUserId} · ${channels}`,
+    );
+    // У супервладельца кнопки отзыва нет — иначе бот останется без хозяина.
+    if (!isAdmin) {
+      rows.push([
+        { label: `🚫 Отозвать: ${label}`, data: encodeCb("ownrm", i) },
+      ]);
+    }
+  });
+
+  if (owners.length === 0) {
+    lines.push("Пока никого — пригласи владельца в разделе «📡 Каналы».");
+  }
+  lines.push(
+    "",
+    "👑 — владелец бота (доступ не отзывается).",
+    "Отзыв убирает доступ к меню. Каналы отозванного не удаляются: они становятся бесхозными и возвращаются владельцу бота при ближайшем перезапуске.",
+  );
+
+  rows.push(navRow(encodeCb("ch")));
+  return { text: lines.join("\n"), keyboard: buildKeyboard(rows) };
+}
+
+/**
+ * Подтверждение отзыва доступа (Шаг 14b-4) — действие необратимо для доступа,
+ * поэтому спрашиваем отдельным экраном (как удаление поста).
+ */
+export async function renderOwnerRevokeConfirm(
+  deps: AdminDeps,
+  idx: number,
+): Promise<Screen> {
+  const owners = await listOwners(deps.prisma);
+  const owner = owners[idx];
+  if (owner === undefined) {
+    return renderOwners(deps);
+  }
+  const check = canRevokeOwner({
+    viewerUserId: deps.viewer.userId,
+    adminId: deps.adminId,
+    targetTelegramUserId: owner.telegramUserId,
+  });
+  if (!check.ok) {
+    return {
+      text: `⚠️ ${check.error}`,
+      keyboard: buildKeyboard([navRow(encodeCb("own"))]),
+    };
+  }
+
+  const label = owner.name ?? `id ${owner.telegramUserId}`;
+  const lines = [
+    `🚫 Отозвать доступ у «${label}»?`,
+    "",
+    `Telegram id: ${owner.telegramUserId}`,
+    `Каналов: ${String(owner.channelCount)}`,
+    "",
+    "Он перестанет открывать меню этого бота. Его каналы не удаляются — станут бесхозными и вернутся тебе при ближайшем перезапуске бота.",
+    "Вернуть доступ можно приглашением заново.",
+  ];
+  return {
+    text: lines.join("\n"),
+    keyboard: buildKeyboard([
+      [{ label: "🚫 Да, отозвать", data: encodeCb("ownrmy", idx) }],
+      [{ label: "◀ Отмена", data: encodeCb("own") }],
+    ]),
   };
 }
 

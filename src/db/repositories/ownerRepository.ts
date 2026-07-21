@@ -52,6 +52,60 @@ export async function findOwnerByTelegramId(
   });
 }
 
+/** Строка экрана «👤 Владельцы» (Шаг 14b-4): владелец + сколько каналов он ведёт. */
+export interface OwnerListEntry extends OwnerRecord {
+  readonly channelCount: number;
+}
+
+/**
+ * Список всех владельцев для экрана «👤 Владельцы» (Шаг 14b-4) — со счётчиком
+ * каналов, чтобы супервладелец видел, что стоит за отзывом доступа.
+ *
+ * Порядок — по дате появления (старые сверху): экран адресует владельца ИНДЕКСОМ
+ * в этом списке (протокол callback-data), поэтому сортировка должна быть
+ * детерминированной, а не «как отдала БД».
+ */
+export async function listOwners(
+  prisma: PrismaClient,
+): Promise<OwnerListEntry[]> {
+  const rows = await prisma.owner.findMany({
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      telegramUserId: true,
+      name: true,
+      _count: { select: { channels: true } },
+    },
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    telegramUserId: r.telegramUserId,
+    name: r.name,
+    channelCount: r._count.channels,
+  }));
+}
+
+/**
+ * ОТЗЫВ ДОСТУПА (Шаг 14b-4): удаляет строку `Owner`. Возвращает `false`, если
+ * такого владельца уже нет (гонка двух нажатий) — вызывающий тогда просто
+ * перерисовывает список.
+ *
+ * Каналы при этом НЕ пропадают: `Channel.ownerId` объявлен `onDelete: SetNull`,
+ * поэтому они становятся бесхозными, а ближайший старт вернёт их супервладельцу
+ * через `claimOrphanChannels`. Это и есть нужное поведение: доступ к каналу
+ * теряет только отозванный, контент и расписание остаются.
+ *
+ * ⚠️ Проверку «кому отзывать вообще можно» делает `canRevokeOwner` (ядро) —
+ * репозиторий её не дублирует.
+ */
+export async function removeOwner(
+  prisma: PrismaClient,
+  ownerId: string,
+): Promise<boolean> {
+  const result = await prisma.owner.deleteMany({ where: { id: ownerId } });
+  return result.count > 0;
+}
+
 /**
  * БЭКОФИЛЛ (Шаг 14a): отдаёт супервладельцу все каналы без владельца и возвращает
  * их число. Идемпотентно — берёт только `ownerId IS NULL`, поэтому чужие каналы
