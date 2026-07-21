@@ -898,6 +898,8 @@ async function routeCallback(
         prisma: deps.prisma,
         logger: deps.logger,
         api: ctx.api,
+        // Шаг 14b-bis-3: превью/публикация уйдут ботом владельца КАНАЛА.
+        ownerBots: deps.ownerBots,
         adminId: deps.adminId,
         pexelsApiKey: deps.pexelsApiKey,
         anthropicApiKey: deps.anthropicApiKey,
@@ -1852,8 +1854,8 @@ async function handleInput(
               ? ""
               : "⚠️ Не смог удалить сообщение с токеном — сотри его сам.\n") +
             `Дальше: открой @${outcome.account.username} и нажми /start — без этого он не сможет тебе писать.\n` +
-            `Потом добавь @${outcome.account.username} админом в свой канал с правом «Публиковать сообщения».\n` +
-            "ℹ️ Управлять можно уже через него. Публикацию в канал пока ведёт общий бот — переключение следующим обновлением.",
+            `Потом добавь @${outcome.account.username} админом в свой канал с правом «Публиковать сообщения» — без этого посты будет публиковать общий бот.\n` +
+            "ℹ️ Управление и публикация теперь идут через твоего бота; если он не сможет отправить, сообщение уйдёт общим — ничего не пропадёт.",
         );
         break;
     }
@@ -2322,6 +2324,8 @@ function postingDepsOf(ctx: Context, deps: AdminDeps): PostingDeps {
     prisma: deps.prisma,
     logger: deps.logger,
     api: ctx.api,
+    // Шаг 14b-bis-3: сервис сам подменит `api` на бота владельца канала.
+    ownerBots: deps.ownerBots,
     adminId: deps.adminId,
     pexelsApiKey: deps.pexelsApiKey,
     anthropicApiKey: deps.anthropicApiKey,

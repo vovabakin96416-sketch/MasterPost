@@ -104,6 +104,9 @@ async function main(): Promise<void> {
   });
 
   const bot = createBot(env.BOT_TOKEN, { ...botDeps, ownerBots: registry });
+  // Шаг 14b-bis-3: общий бот — фолбэк маршрутизации. Реестр обязан знать его Api,
+  // иначе сбой бота клиента (не админ в канале, 403 в личке) стоил бы поста.
+  registry.setMainApi(bot.api);
 
   // Авто-повтор при лимитах Telegram (429 retry_after) и транзиентных сетевых
   // сбоях: без него пост/превью просто теряется с ошибкой в логе.
@@ -114,6 +117,9 @@ async function main(): Promise<void> {
     prisma,
     logger,
     api: bot.api,
+    // Шаг 14b-bis-3: пост канала уходит ботом ЕГО владельца (реестр), а `api`
+    // главного бота остаётся фолбэком, если бот клиента не смог отправить.
+    ownerBots: registry,
     adminId: env.ADMIN_ID,
     pexelsApiKey: env.PEXELS_API_KEY,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
@@ -126,6 +132,8 @@ async function main(): Promise<void> {
     prisma,
     logger,
     api: bot.api,
+    // Шаг 14b-bis-3: отчёты и напоминания — ботом владельца канала.
+    ownerBots: registry,
     adminId: env.ADMIN_ID,
     mtproto,
     // Шаг 12d: AI-пересказ секции роста в отчёте (тумблер в меню; без ключа — эвристика).

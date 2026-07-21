@@ -10,6 +10,8 @@ import { resolveOwnerTarget } from "../core/approval/access.js";
 import { localDateParts } from "../core/schedule/localDate.js";
 import { resolveCampaignDay } from "../core/schedule/resolveCampaignDay.js";
 import { shouldWarnContentEnding } from "../core/analytics/contentEnding.js";
+import { routeChannel, sendVia } from "./botRouting.js";
+import type { OwnerBotRegistry } from "./botRegistry.js";
 
 /**
  * Сервис аналитики канала (Шаг 7a — порт части `analytics.py`). Пока умеет одно:
@@ -29,6 +31,10 @@ export interface AnalyticsDeps {
   prisma: PrismaClient;
   logger: Logger;
   api: Api;
+  // Шаг 14b-bis-3: маршрутизация «каким ботом писать» (см. `services/botRouting.ts`).
+  // Служебные сообщения канала идут ботом его владельца, при сбое — общим.
+  ownerBots?: OwnerBotRegistry | undefined;
+  fallbackApi?: Api | undefined;
   adminId: number;
 }
 
@@ -62,10 +68,14 @@ export async function sendToUser(
   text: string,
 ): Promise<void> {
   try {
-    await deps.api.sendMessage(userId, text, { parse_mode: "Markdown" });
+    // Шаг 14b-bis-3: `sendVia` — отправка ботом владельца с повтором общим ботом,
+    // если тот не смог (владелец не нажал /start своему боту → 403).
+    await sendVia(deps, (api) =>
+      api.sendMessage(userId, text, { parse_mode: "Markdown" }),
+    );
   } catch (err) {
     if (err instanceof GrammyError && /pars|entit/i.test(err.description)) {
-      await deps.api.sendMessage(userId, text);
+      await sendVia(deps, (api) => api.sendMessage(userId, text));
       return;
     }
     deps.logger.error({ err }, "не смог отправить напоминание владельцу");
@@ -101,12 +111,14 @@ export async function ownerTargetOf(
  * Тик планировщика (ВС 21:00 МСК): если идёт последняя неделя плана — напомнить
  * владельца КАНАЛА залить новый месяц контента. Иначе — тихо. Порт `check_content_ending`.
  */
-export async function runContentEndingCheck(deps: AnalyticsDeps): Promise<void> {
-  const channel = await getPostingChannel(deps.prisma);
+export async function runContentEndingCheck(rawDeps: AnalyticsDeps): Promise<void> {
+  const channel = await getPostingChannel(rawDeps.prisma);
   if (channel === null) {
     return;
   }
   if (shouldWarnContentEnding(campaignWeekOf(channel))) {
+    // Шаг 14b-bis-3: напоминание — ботом владельца канала.
+    const deps = await routeChannel(rawDeps, channel.id);
     await sendToUser(deps, await ownerTargetOf(deps, channel.id), CONTENT_ENDING_TEXT);
     deps.logger.info("отправлено напоминание о конце контента");
   }

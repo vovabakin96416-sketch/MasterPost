@@ -457,6 +457,22 @@ export async function getOwnerTelegramIdByChannelId(
   return row?.owner?.telegramUserId ?? null;
 }
 
+/**
+ * id строки `Owner` по id канала, или `null` (канал не найден либо без владельца).
+ * Шаг 14b-bis-3: по нему маршрутизация находит бота владельца в реестре — публикация
+ * и служебные DM канала идут ЕГО ботом, а не общим.
+ */
+export async function getOwnerIdByChannelId(
+  prisma: PrismaClient,
+  channelId: string,
+): Promise<string | null> {
+  const row = await prisma.channel.findUnique({
+    where: { id: channelId },
+    select: { ownerId: true },
+  });
+  return row?.ownerId ?? null;
+}
+
 /** Включает/выключает канал (Шаг 8a). Неактивный канал рантайм не ведёт. */
 export async function setChannelActive(
   prisma: PrismaClient,

@@ -62,6 +62,14 @@ export interface OwnerBotRegistry {
   stop(ownerId: string): Promise<void>;
   /** Api бота владельца для маршрутизации (14b-bis-3); `undefined` — бот не поднят. */
   getApi(ownerId: string): Api | undefined;
+  /**
+   * Запоминает Api ОБЩЕГО бота (Шаг 14b-bis-3). Он — фолбэк маршрутизации: если бот
+   * клиента не сумел опубликовать пост или написать в личку, сообщение уходит общим.
+   * Ставится один раз в `index.ts` сразу после создания главного бота.
+   */
+  setMainApi(api: Api): void;
+  /** Api общего бота, если известен. */
+  getMainApi(): Api | undefined;
   /** Сколько ботов клиентов сейчас работает (лог старта, диагностика). */
   size(): number;
   /** Гасит всех — вызывается на SIGTERM/SIGINT вместе с главным ботом. */
@@ -78,6 +86,7 @@ export function createOwnerBotRegistry(
 ): OwnerBotRegistry {
   const { prisma, logger, botTokenEncKey, buildBot } = deps;
   const running = new Map<string, RunningBot>();
+  let mainApi: Api | undefined;
 
   const forget = async (ownerId: string): Promise<void> => {
     const entry = running.get(ownerId);
@@ -193,6 +202,14 @@ export function createOwnerBotRegistry(
 
     getApi(ownerId: string): Api | undefined {
       return running.get(ownerId)?.bot.api;
+    },
+
+    setMainApi(api: Api): void {
+      mainApi = api;
+    },
+
+    getMainApi(): Api | undefined {
+      return mainApi;
     },
 
     size(): number {

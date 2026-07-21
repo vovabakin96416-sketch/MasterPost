@@ -28,6 +28,7 @@ import {
 import { getPostPhotoSources } from "../../../db/repositories/postRepository.js";
 import { validateAnswer } from "../../../core/menu/validation.js";
 import { canActOnChannel } from "../../../core/approval/access.js";
+import type { OwnerBotRegistry } from "../../../services/botRegistry.js";
 
 /**
  * Композер одобрения постов (Шаг 5 + фото Шаг 6a). Изолированный модуль: ловит
@@ -49,6 +50,9 @@ export interface ApprovalDeps {
   pexelsApiKey: string | undefined;
   anthropicApiKey: string | undefined;
   timeoutMs?: number | undefined; // Шаг 11b: таймаут вызова Claude (мс); undefined → дефолт
+  // Шаг 14b-bis-3: реестр ботов клиентов — публикация одобренного поста идёт ботом
+  // владельца КАНАЛА поста, а не тем, в котором нажали кнопку.
+  ownerBots?: OwnerBotRegistry | undefined;
 }
 
 export function createApprovalComposer(deps: ApprovalDeps): Composer<Context> {
@@ -132,6 +136,8 @@ function postingDepsOf(ctx: Context, deps: ApprovalDeps): PostingDeps {
     prisma: deps.prisma,
     logger: deps.logger,
     api: ctx.api,
+    // Шаг 14b-bis-3: публикация одобренного поста — ботом владельца канала.
+    ownerBots: deps.ownerBots,
     adminId: deps.adminId,
     pexelsApiKey: deps.pexelsApiKey,
     anthropicApiKey: deps.anthropicApiKey,

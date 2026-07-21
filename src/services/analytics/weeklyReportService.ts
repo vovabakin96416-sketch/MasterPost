@@ -21,6 +21,7 @@ import {
   sendToAdmin,
   sendToUser,
 } from "../analyticsService.js";
+import { routeChannel } from "../botRouting.js";
 
 /**
  * Сервис еженедельного отчёта по просмотрам (Шаг 7c) — порт `weekly_stats_report`.
@@ -155,15 +156,17 @@ async function collectReport(
  * неделю (14b-2; канал без владельца → супервладелец). Если MTProto не настроен или
  * нет канала — тихо (бот работает как раньше). Ошибки логируем.
  */
-export async function runWeeklyReport(deps: WeeklyReportDeps): Promise<void> {
-  const cfg = deps.mtproto;
+export async function runWeeklyReport(rawDeps: WeeklyReportDeps): Promise<void> {
+  const cfg = rawDeps.mtproto;
   if (!isMtprotoConfigured(cfg)) {
     return;
   }
-  const channel = await getPostingChannel(deps.prisma);
+  const channel = await getPostingChannel(rawDeps.prisma);
   if (channel === null || channel.chatId === null) {
     return;
   }
+  // Шаг 14b-bis-3: отчёт владельцу шлём ЕГО ботом (при сбое — общим).
+  const deps = await routeChannel(rawDeps, channel.id);
   const target = await ownerTargetOf(deps, channel.id);
   try {
     const report = await collectReport(

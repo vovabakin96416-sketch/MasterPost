@@ -48,6 +48,8 @@ import type { PhotoSources } from "../core/media/resolvePriority.js";
 // циклический, но безопасный: обе стороны используются только внутри тел функций
 // (не на верхнем уровне модуля), а объявления функций поднимаются (hoisting).
 import { buildAiDraft, type AiDraftFailure } from "./ai/aiPostApprovalService.js";
+import { routeChannel, sendVia } from "./botRouting.js";
+import type { OwnerBotRegistry } from "./botRegistry.js";
 
 /**
  * Сервис публикации постов (Шаг 4 / Доработка 4.1 / Шаг 6a — порт `send_post`).
@@ -70,6 +72,12 @@ export interface PostingDeps {
   prisma: PrismaClient;
   logger: Logger;
   api: Api;
+  // Шаг 14b-bis-3: маршрутизация «каким ботом писать». `ownerBots` — реестр ботов
+  // клиентов (пост канала уходит ботом ЕГО владельца), `fallbackApi` — общий бот,
+  // которым повторяем отправку, если бот клиента не смог (нет прав, 403 в личке).
+  // Оба опциональны: без них сервис работает ровно как до 14b-bis (один `api`).
+  ownerBots?: OwnerBotRegistry | undefined;
+  fallbackApi?: Api | undefined;
   adminId: number;
   pexelsApiKey: string | undefined;
   anthropicApiKey: string | undefined;
@@ -147,7 +155,22 @@ export async function sendPost(
   photo: PhotoRef | null,
   keyboard?: InlineKeyboard,
 ): Promise<number | null> {
-  const { api, logger } = deps;
+  // Шаг 14b-bis-3: отправляем ботом владельца канала, а если он не смог (не админ
+  // в канале, отобрали права, не нажали /start) — повторяем общим ботом целиком,
+  // вместе со всеми деградациями ниже. Пост важнее того, чьим именем он подписан.
+  return sendVia(deps, (api) =>
+    sendPostVia(api, deps.logger, chatId, text, photo, keyboard),
+  );
+}
+
+async function sendPostVia(
+  api: Api,
+  logger: Logger,
+  chatId: string | number,
+  text: string,
+  photo: PhotoRef | null,
+  keyboard?: InlineKeyboard,
+): Promise<number | null> {
   if (photo !== null) {
     const input = toInputPhoto(photo);
     const caption = truncateCaption(text);
@@ -249,14 +272,20 @@ async function channelNotifyTarget(
   }
 }
 
-/** Уведомление владельцу канала простым текстом; ошибку доставки только логируем. */
+/**
+ * Уведомление владельцу канала простым текстом; ошибку доставки только логируем.
+ * Шаг 14b-bis-3: маршрутизируем ЗДЕСЬ, а не у вызывающих, — уведомления шлются из
+ * десятка мест, и лучше лишний запрос владельца, чем письмо не тем ботом.
+ */
 async function notifyChannelOwner(
   deps: PostingDeps,
   channelId: string,
   text: string,
 ): Promise<void> {
+  const routed = await routeChannel(deps, channelId);
   try {
-    await deps.api.sendMessage(await channelNotifyTarget(deps, channelId), text);
+    const target = await channelNotifyTarget(routed, channelId);
+    await sendVia(routed, (api) => api.sendMessage(target, text));
   } catch (err) {
     deps.logger.error({ err, channelId }, "не смог уведомить владельца канала");
   }
@@ -297,9 +326,12 @@ export async function publishDuePosts(deps: PostingDeps): Promise<void> {
  * простоя — догоняет. Индекс поста = число уже опубликованных сегодня.
  */
 export async function publishDuePostsForChannel(
-  deps: PostingDeps,
+  rawDeps: PostingDeps,
   channel: PostingChannel,
 ): Promise<void> {
+  // Шаг 14b-bis-3: с этого места и до конца тика канал ведёт бот СВОЕГО владельца
+  // (если подключён) — публикация, превью одобрения, уведомления.
+  const deps = await routeChannel(rawDeps, channel.id);
   const { prisma, logger } = deps;
   const config = await readAutopostConfig(prisma, channel.id);
   if (!config.enabled) {
@@ -460,9 +492,11 @@ async function placeAiFallbackPost(
  * опубликованным ТОЛЬКО после успешной отправки (иначе следующий тик повторит).
  */
 async function publishOneOffPost(
-  deps: PostingDeps,
+  rawDeps: PostingDeps,
   post: DueOneOffPost,
 ): Promise<void> {
+  // Шаг 14b-bis-3: разовый пост тоже уходит ботом владельца канала.
+  const deps = await routeChannel(rawDeps, post.channelId);
   const channel = await getPostingChannelById(deps.prisma, post.channelId);
   if (channel === null) {
     // Канал удалён — пост уже не доставить; помечаем, чтобы не зацикливаться.
@@ -535,12 +569,15 @@ export function photoRefFromCache(photoUrl: string | null): PhotoRef | null {
  * к ошибкам доставки — превью не должно «ронять» тик планировщика/обработчик меню.
  */
 export async function sendApprovalPreview(
-  deps: PostingDeps,
+  rawDeps: PostingDeps,
   channelId: string,
   caption: string,
   pendingId: string,
   photo: PhotoRef | null,
 ): Promise<void> {
+  // Шаг 14b-bis-3: превью с кнопками шлём ботом владельца — тогда и решение
+  // («✅ Опубликовать») он нажмёт в СВОЁМ боте, и публикация пойдёт оттуда же.
+  const deps = await routeChannel(rawDeps, channelId);
   const target = await channelNotifyTarget(deps, channelId);
   const keyboard = approvalKeyboard(pendingId);
   try {
@@ -552,7 +589,9 @@ export async function sendApprovalPreview(
   // Последний фолбэк: без фото и без Markdown, чтобы кнопки одобрения точно дошли
   // (даже если виноваты битое фото и/или кривая разметка поста).
   try {
-    await deps.api.sendMessage(target, caption, { reply_markup: keyboard });
+    await sendVia(deps, (api) =>
+      api.sendMessage(target, caption, { reply_markup: keyboard }),
+    );
   } catch (err) {
     deps.logger.error({ err }, "не смог отправить даже текстовое превью одобрения");
     await notifyChannelOwner(
@@ -644,13 +683,16 @@ export type PublishPendingResult =
  * одобрения, а не постановки в очередь.
  */
 export async function publishPending(
-  deps: PostingDeps,
+  rawDeps: PostingDeps,
   pendingId: string,
 ): Promise<PublishPendingResult> {
-  const pending = await getPending(deps.prisma, pendingId);
+  const pending = await getPending(rawDeps.prisma, pendingId);
   if (pending === null) {
     return { ok: false, reason: "not_found" };
   }
+  // Шаг 14b-bis-3: одобренный пост публикует бот владельца КАНАЛА поста (а не бот,
+  // в котором нажали кнопку, — это может быть общий бот супервладельца).
+  const deps = await routeChannel(rawDeps, pending.channelId);
   // Шаг 8b: одобренный пост уходит в СВОЙ канал (тот, для которого создан снимок),
   // а не в «первый активный» — иначе с двумя каналами публикация попадёт не туда.
   const channel = await getPostingChannelById(deps.prisma, pending.channelId);
@@ -723,13 +765,15 @@ export type PendingPreviewResult =
  * одобрения с его кнопками остаётся на месте. Ничего не публикует и не трогает очередь.
  */
 export async function sendPendingPreview(
-  deps: PostingDeps,
+  rawDeps: PostingDeps,
   pendingId: string,
 ): Promise<PendingPreviewResult> {
-  const pending = await getPending(deps.prisma, pendingId);
+  const pending = await getPending(rawDeps.prisma, pendingId);
   if (pending === null) {
     return { ok: false, reason: "not_found" };
   }
+  // Шаг 14b-bis-3: превью «как в канале» показываем тем же ботом, что и опубликует.
+  const deps = await routeChannel(rawDeps, pending.channelId);
   const keyboard = await buildPendingPostKeyboard(
     deps,
     pending.channelId,
