@@ -8,12 +8,14 @@ import { createApprovalComposer } from "./features/approval/index.js";
 import { createPostButtonsComposer } from "./features/postButtons/index.js";
 import { createOnboardingComposer } from "./features/onboarding/index.js";
 import { findOwnerByTelegramId } from "../db/repositories/ownerRepository.js";
+import { isClientBotUpdateAllowed } from "../core/bots/botStartup.js";
 import {
   ACCESS_DENIED_TRIAL_EXPIRED,
   checkOwnerRecordAccess,
 } from "../core/menu/ownerPlan.js";
 import type { CommentDeps } from "./features/comments/types.js";
 import type { MtprotoConfig } from "../services/analytics/mtprotoConfig.js";
+import type { OwnerBotRegistry } from "../services/botRegistry.js";
 
 /** Зависимости бота: стадии-комментов + id админа для меню + ключ Pexels + ключ Anthropic + статус MTProto. */
 export interface BotDeps extends CommentDeps {
@@ -26,6 +28,11 @@ export interface BotDeps extends CommentDeps {
   // подключать себе нельзя). Без ключа экран «🤖 Мой бот» отключён.
   botTokenEncKey: string | undefined;
   mainBotUserId: string | undefined;
+  // Шаг 14b-bis-2: если бот поднят как БОТ КЛИЕНТА — Telegram-id его владельца.
+  // undefined → это общий бот (обслуживает всех зарегистрированных владельцев).
+  clientOwnerUserId?: number | undefined;
+  // Шаг 14b-bis-2: реестр ботов клиентов (меню поднимает/гасит бота по кнопке).
+  ownerBots?: OwnerBotRegistry | undefined;
   mtproto: MtprotoConfig;
 }
 
@@ -38,6 +45,26 @@ export interface BotDeps extends CommentDeps {
  */
 export function createBot(token: string, deps: BotDeps): Bot {
   const bot = new Bot(token);
+
+  // 🔒 Шаг 14b-bis-2. Бот клиента в ЛИЧКЕ обслуживает только своего владельца.
+  // Причина не в вежливости: токен этого бота у клиента, значит все его апдейты
+  // клиент вправе прочитать. Пустив сюда чужую личку, мы показали бы чужое меню
+  // (каналы, план, отчёты) через бота постороннего человека.
+  // Не-личные апдейты (пост в канале, коммент, кнопка под постом, назначение
+  // админом) идут дальше как обычно — их шлют подписчики, а не владелец.
+  const { clientOwnerUserId } = deps;
+  if (clientOwnerUserId !== undefined) {
+    bot.use(async (ctx, next) => {
+      if (
+        !isClientBotUpdateAllowed(ctx.chat?.type, ctx.from?.id, clientOwnerUserId)
+      ) {
+        // Молча: отвечать постороннему — значит превратить бота клиента в
+        // рассылочный автомат для того, кто нашёл его @username.
+        return;
+      }
+      await next();
+    });
+  }
 
   bot.command("start", async (ctx) => {
     // Зарегистрированному владельцу (гейт 14b-1 — таблица `Owner`, супервладелец

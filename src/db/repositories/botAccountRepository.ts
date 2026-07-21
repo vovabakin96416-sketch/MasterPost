@@ -7,8 +7,8 @@ import type { PrismaClient } from "../client.js";
  * зашифрованную строку (`tokenCipher`). Ключ живёт в env и известен только
  * сервису — так «достать токен» нельзя, случайно дёрнув репозиторий.
  *
- * В 14b-bis-1 записи только копятся: процесс поднимает один бот из env.
- * Их чтение для запуска — `listActiveBotAccounts` в 14b-bis-2.
+ * С 14b-bis-2 эти записи читает запуск процесса (`listActiveBotAccounts`), а
+ * результат запуска возвращается сюда же в `lastError`.
  */
 
 /** Bot-аккаунт в форме, нужной экрану меню и (с 14b-bis-2) запуску процесса. */
@@ -98,16 +98,63 @@ export async function removeBotAccount(
 }
 
 /**
- * Все включённые bot-аккаунты — вход для запуска ботов клиентов в 14b-bis-2.
+ * Bot-аккаунт вместе с Telegram-id владельца (Шаг 14b-bis-2). Id нужен запуску:
+ * бот клиента обслуживает в личке ТОЛЬКО своего владельца, а сравнивать его с
+ * `ctx.from.id` можно лишь зная, кто владелец.
+ */
+export interface ActiveBotAccount extends BotAccountRecord {
+  readonly ownerTelegramUserId: string;
+}
+
+/**
+ * Все включённые bot-аккаунты — вход для запуска ботов клиентов (14b-bis-2).
  * Порядок детерминированный (по дате подключения): лог старта должен читаться
  * одинаково от перезапуска к перезапуску.
  */
 export async function listActiveBotAccounts(
   prisma: PrismaClient,
-): Promise<BotAccountRecord[]> {
-  return prisma.botAccount.findMany({
+): Promise<ActiveBotAccount[]> {
+  const rows = await prisma.botAccount.findMany({
     where: { isActive: true },
     orderBy: { createdAt: "asc" },
-    select: BOT_ACCOUNT_SELECT,
+    select: {
+      ...BOT_ACCOUNT_SELECT,
+      owner: { select: { telegramUserId: true } },
+    },
+  });
+  return rows.map(({ owner, ...account }) => ({
+    ...account,
+    ownerTelegramUserId: owner.telegramUserId,
+  }));
+}
+
+/**
+ * Записывает причину, по которой бот владельца не поднялся (Шаг 14b-bis-2).
+ *
+ * ⚠️ `isActive` НЕ гасим: 409/сеть/чужой рестарт — исходы временные, а выключенный
+ * аккаунт владелец сам не включит (кнопки «включить» нет, только «подключить заново»).
+ * Пусть следующий старт процесса попробует снова, а владелец увидит причину на экране.
+ */
+export async function markBotAccountError(
+  prisma: PrismaClient,
+  ownerId: string,
+  message: string,
+): Promise<void> {
+  // updateMany, а не update: запись могли отключить в соседнем чате, пока бот
+  // поднимался, — «нет строки» здесь не ошибка.
+  await prisma.botAccount.updateMany({
+    where: { ownerId },
+    data: { lastError: message },
+  });
+}
+
+/** Снимает прошлую ошибку после удачного запуска — иначе экран пугает старым сбоем. */
+export async function clearBotAccountError(
+  prisma: PrismaClient,
+  ownerId: string,
+): Promise<void> {
+  await prisma.botAccount.updateMany({
+    where: { ownerId, lastError: { not: null } },
+    data: { lastError: null },
   });
 }

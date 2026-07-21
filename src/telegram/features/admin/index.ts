@@ -471,6 +471,9 @@ async function routeCallback(
     case "botdely": {
       const removed = await removeBotAccount(deps.prisma, deps.viewer.ownerId);
       if (removed) {
+        // Шаг 14b-bis-2: гасим сразу. Запись удалена, но long polling живёт в
+        // этом же процессе — без остановки бот отвечал бы до рестарта.
+        await deps.ownerBots?.stop(deps.viewer.ownerId);
         deps.logger.info({ ownerId: deps.viewer.ownerId }, "бот владельца отключён");
       }
       await editScreen(ctx, await renderBotAccount(deps));
@@ -1834,15 +1837,23 @@ async function handleInput(
         break;
       case "ok":
         pending.delete(deps.viewer.userId);
+        // Шаг 14b-bis-2: поднимаем бота сразу, не дожидаясь рестарта процесса.
+        // Замена токена внутри сама гасит прежнего бота.
+        await deps.ownerBots?.launch({
+          ownerId: outcome.account.ownerId,
+          botUserId: outcome.account.botUserId,
+          username: outcome.account.username,
+          tokenCipher: outcome.account.tokenCipher,
+          ownerTelegramUserId: String(deps.viewer.userId),
+        });
         await ctx.reply(
-          `✅ Бот @${outcome.account.username} подключён.\n` +
+          `✅ Бот @${outcome.account.username} подключён и запущен.\n` +
             (tokenErased
               ? ""
               : "⚠️ Не смог удалить сообщение с токеном — сотри его сам.\n") +
-            "Дальше: добавь @" +
-            outcome.account.username +
-            " админом в свой канал с правом «Публиковать сообщения».\n" +
-            "ℹ️ Публиковать через него бот начнёт следующим обновлением — сейчас каналы ведёт общий бот.",
+            `Дальше: открой @${outcome.account.username} и нажми /start — без этого он не сможет тебе писать.\n` +
+            `Потом добавь @${outcome.account.username} админом в свой канал с правом «Публиковать сообщения».\n` +
+            "ℹ️ Управлять можно уже через него. Публикацию в канал пока ведёт общий бот — переключение следующим обновлением.",
         );
         break;
     }

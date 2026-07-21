@@ -2,6 +2,7 @@ import type { InlineKeyboard } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../../../db/client.js";
 import type { MtprotoConfig } from "../../../services/analytics/mtprotoConfig.js";
+import type { OwnerBotRegistry } from "../../../services/botRegistry.js";
 import type { InteractiveType } from "../../../db/repositories/postRepository.js";
 import type { Button, Choice } from "../../../core/content/postSchema.js";
 
@@ -45,6 +46,11 @@ export interface AdminBotDeps {
   // Pexels); `mainBotUserId` — id общего бота, его подключить себе нельзя (409).
   botTokenEncKey: string | undefined;
   mainBotUserId: string | undefined;
+  // Шаг 14b-bis-2: реестр запущенных ботов клиентов. Меню поднимает бота сразу
+  // после подключения токена и гасит при отключении — иначе владелец ждал бы
+  // рестарта процесса, а отключённый бот продолжал бы читать апдейты.
+  // undefined → мультибот не собран (тесты, сценарии без реестра).
+  ownerBots?: OwnerBotRegistry | undefined;
   // Шаг 7b: только для строки статуса в «📊 Аналитика». Это ЧИСТЫЙ конфиг (без GramJS) —
   // меню не тянет тяжёлый mtprotoClient в импорт-граф запущенного бота.
   mtproto: MtprotoConfig;

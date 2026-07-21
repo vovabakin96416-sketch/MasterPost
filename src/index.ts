@@ -8,6 +8,10 @@ import {
   ensureOwner,
 } from "./db/repositories/ownerRepository.js";
 import { createBot } from "./telegram/bot.js";
+import {
+  createOwnerBotRegistry,
+  startStoredOwnerBots,
+} from "./services/botRegistry.js";
 import { startScheduler } from "./scheduler/index.js";
 import { startAnalyticsScheduler } from "./scheduler/analytics.js";
 import { startHealthServer } from "./server/health.js";
@@ -64,7 +68,7 @@ async function main(): Promise<void> {
     apiHash: env.TELEGRAM_API_HASH,
     session: env.TELEGRAM_SESSION,
   };
-  const bot = createBot(env.BOT_TOKEN, {
+  const botDeps = {
     prisma,
     logger,
     adminId: env.ADMIN_ID,
@@ -78,7 +82,28 @@ async function main(): Promise<void> {
     botTokenEncKey: env.BOT_TOKEN_ENC_KEY,
     mainBotUserId: env.BOT_TOKEN.split(":")[0],
     mtproto,
+  };
+
+  // Шаг 14b-bis-2: реестр ботов клиентов. Создаётся ДО ботов — на него ссылаются
+  // и главный бот (кнопки «подключить/отключить» поднимают и гасят бота сразу),
+  // и сами боты клиентов. `buildBot` замыкает `registry` намеренно: к моменту
+  // вызова он уже создан.
+  const registry = createOwnerBotRegistry({
+    prisma,
+    logger,
+    botTokenEncKey: env.BOT_TOKEN_ENC_KEY,
+    buildBot: (token, ownerUserId) => {
+      const clientBot = createBot(token, {
+        ...botDeps,
+        clientOwnerUserId: ownerUserId,
+        ownerBots: registry,
+      });
+      clientBot.api.config.use(autoRetry());
+      return clientBot;
+    },
   });
+
+  const bot = createBot(env.BOT_TOKEN, { ...botDeps, ownerBots: registry });
 
   // Авто-повтор при лимитах Telegram (429 retry_after) и транзиентных сетевых
   // сбоях: без него пост/превью просто теряется с ошибкой в логе.
@@ -115,6 +140,9 @@ async function main(): Promise<void> {
     scheduler.stop();
     analyticsScheduler.stop();
     void bot.stop();
+    // Боты клиентов гасим вместе с главным: иначе их long polling пережил бы
+    // сигнал и новый экземпляр процесса получил бы 409 на каждом из них.
+    void registry.stopAll();
     server.close();
     void prisma.$disconnect();
   };
@@ -144,6 +172,12 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.error({ err }, "не смог установить список команд бота");
   }
+
+  // Шаг 14b-bis-2: поднимаем ботов подключённых клиентов. Каждый — свой long
+  // polling в этом же процессе; ни один сбой сюда не выплёскивается (внутри всё
+  // ловится и уходит в `lastError`), поэтому главный бот стартует в любом случае.
+  const launched = await startStoredOwnerBots(registry, prisma, logger);
+  logger.info({ launched }, "боты клиентов подняты");
 
   logger.info("starting bot (long polling)");
   await bot.start({
