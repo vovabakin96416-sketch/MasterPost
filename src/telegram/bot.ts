@@ -15,7 +15,6 @@ import {
 } from "../core/menu/ownerPlan.js";
 import type { CommentDeps } from "./features/comments/types.js";
 import type { MtprotoConfig } from "../services/analytics/mtprotoConfig.js";
-import type { OwnerBotRegistry } from "../services/botRegistry.js";
 
 /** Зависимости бота: стадии-комментов + id админа для меню + ключ Pexels + ключ Anthropic + статус MTProto. */
 export interface BotDeps extends CommentDeps {
@@ -28,11 +27,9 @@ export interface BotDeps extends CommentDeps {
   // подключать себе нельзя). Без ключа экран «🤖 Мой бот» отключён.
   botTokenEncKey: string | undefined;
   mainBotUserId: string | undefined;
-  // Шаг 14b-bis-2: если бот поднят как БОТ КЛИЕНТА — Telegram-id его владельца.
-  // undefined → это общий бот (обслуживает всех зарегистрированных владельцев).
-  clientOwnerUserId?: number | undefined;
-  // Шаг 14b-bis-2: реестр ботов клиентов (меню поднимает/гасит бота по кнопке).
-  ownerBots?: OwnerBotRegistry | undefined;
+  // Шаг 14b-bis-2: `clientOwnerUserId` (личность бота клиента) и `ownerBots`
+  // (реестр ботов клиентов) объявлены в `CommentDeps` — стадии комментов тоже
+  // читают их для разграничения общий/клиентский бот в обсуждении (14b-bis-4).
   mtproto: MtprotoConfig;
 }
 

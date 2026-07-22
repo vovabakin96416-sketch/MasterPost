@@ -10,12 +10,16 @@ const taro: RoutableChannel = {
   username: "@sofia_gada1ka",
   chatId: "@sofia_gada1ka",
   triggerWords: ["карта", "кофе"],
+  ownerId: null,
+  ownerTelegramUserId: null,
 };
 const news: RoutableChannel = {
   id: "ch-news",
   username: "@daily_news",
   chatId: "-1001234567890",
   triggerWords: ["погода"],
+  ownerId: null,
+  ownerTelegramUserId: null,
 };
 const channels: RoutableChannel[] = [taro, news];
 

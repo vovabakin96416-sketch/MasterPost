@@ -17,6 +17,12 @@ export interface RoutableChannel {
   username: string | null; // "@sofia_gada1ka"
   chatId: string | null; // "@sofia_gada1ka" или числовой "-100…"
   triggerWords: string[];
+  // Шаг 14b-bis-4: принадлежность канала — для разграничения общий/клиентский бот
+  // в обсуждении (см. `core/comments/commentAuthority.ts`). `ownerId` (строка `Owner`)
+  // ищет бота владельца в реестре; `ownerTelegramUserId` (Telegram-id владельца
+  // строкой, как в БД) сверяется с владельцем бота клиента. Оба `null` — бесхозный канал.
+  ownerId: string | null;
+  ownerTelegramUserId: string | null;
 }
 
 /** Срез `reply_to_message.sender_chat` — origin-канал автопересланного поста. */

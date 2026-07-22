@@ -4,6 +4,8 @@ import {
   resolveCommentChannel as pickCommentChannel,
   type RoutableChannel,
 } from "../../../core/comments/routeChannel.js";
+import { shouldHandleComment } from "../../../core/comments/commentAuthority.js";
+import { parseBotOwnerUserId } from "../../../core/bots/botStartup.js";
 import {
   findChannelIdByDiscussionGroup,
   getActiveRoutableChannels,
@@ -53,5 +55,36 @@ export async function resolveCommentChannel(
   if (senderChatMatch !== null && learnedId !== channel.id && groupId !== "") {
     await setDiscussionGroup(deps.prisma, channel.id, groupId);
   }
+  // Шаг 14b-bis-4: разграничение общий/клиентский бот. Коммент в обсуждении получают
+  // ОБА бота; здесь решаем, чей он. «Не мой» → null, и все три стадии молчат (для них
+  // null уже означает «pass»). Это же автоматически переносит на бота клиента модерацию
+  // и AI-ответы — они резолвят канал через этот же путь.
+  if (!isCommentForThisBot(channel, deps)) {
+    return null;
+  }
   return channel;
+}
+
+/**
+ * Гейт принадлежности коммента (Шаг 14b-bis-4). Достаёт из резолвнутого канала
+ * владельца, узнаёт по реестру, поднят ли у него свой бот, и передаёт факты чистому
+ * решателю `shouldHandleComment`. Реестра нет (мультибот не собран) — как раньше:
+ * общий бот отвечает, у бота клиента реестр всегда есть.
+ */
+function isCommentForThisBot(
+  channel: RoutableChannel,
+  deps: CommentDeps,
+): boolean {
+  const channelOwnerTelegramId =
+    channel.ownerTelegramUserId === null
+      ? null
+      : parseBotOwnerUserId(channel.ownerTelegramUserId);
+  const channelOwnerHasClientBot =
+    channel.ownerId !== null &&
+    deps.ownerBots?.getApi(channel.ownerId) !== undefined;
+  return shouldHandleComment({
+    clientOwnerUserId: deps.clientOwnerUserId,
+    channelOwnerTelegramId,
+    channelOwnerHasClientBot,
+  });
 }

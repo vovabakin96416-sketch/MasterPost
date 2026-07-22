@@ -76,11 +76,25 @@ export async function getActiveChannel(
 export async function getActiveRoutableChannels(
   prisma: PrismaClient,
 ): Promise<RoutableChannel[]> {
-  return prisma.channel.findMany({
+  // Шаг 14b-bis-4: тянем принадлежность канала (владелец + его Telegram-id) одним
+  // join'ом — по ней стадии решают, отвечает ли в обсуждении общий бот или бот
+  // владельца (без разграничения оба ответят на один коммент дважды).
+  const rows = await prisma.channel.findMany({
     where: { isActive: true },
-    select: { id: true, username: true, chatId: true, triggerWords: true },
+    select: {
+      id: true,
+      username: true,
+      chatId: true,
+      triggerWords: true,
+      ownerId: true,
+      owner: { select: { telegramUserId: true } },
+    },
     orderBy: { createdAt: "asc" },
   });
+  return rows.map(({ owner, ...channel }) => ({
+    ...channel,
+    ownerTelegramUserId: owner?.telegramUserId ?? null,
+  }));
 }
 
 /**

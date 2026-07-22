@@ -1,6 +1,7 @@
 import type { Context } from "grammy";
 import type { Logger } from "pino";
 import type { PrismaClient } from "../../../db/client.js";
+import type { OwnerBotRegistry } from "../../../services/botRegistry.js";
 
 /**
  * Каркас конвейера обработки комментариев канала.
@@ -24,6 +25,13 @@ export interface CommentDeps {
   anthropicApiKey?: string | undefined;
   // Шаг 11b: таймаут вызова Claude (мс); undefined → DEFAULT_AI_TIMEOUT_MS.
   timeoutMs?: number | undefined;
+  // Шаг 14b-bis-4: разграничение общий/клиентский бот в обсуждении.
+  // `clientOwnerUserId` — Telegram-id владельца, если бот поднят как БОТ КЛИЕНТА
+  // (undefined → общий бот). `ownerBots` — реестр ботов клиентов: по нему общий бот
+  // узнаёт, что у владельца канала поднят свой бот (тогда общий молчит). Оба
+  // приходят из `BotDeps` (см. `createBot`).
+  clientOwnerUserId?: number | undefined;
+  ownerBots?: OwnerBotRegistry | undefined;
 }
 
 /** Результат стадии: `handled` — обработано (стоп), `pass` — передать дальше. */
