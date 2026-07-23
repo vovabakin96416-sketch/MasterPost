@@ -10,7 +10,12 @@ import {
   renderAnonymous,
   renderTemplate,
 } from "../src/core/triggers/pickPrediction";
-import { isOnCooldown, nextExpiry } from "../src/core/triggers/cooldown";
+import {
+  COOLDOWN_RETENTION_DAYS,
+  cooldownPurgeCutoff,
+  isOnCooldown,
+  nextExpiry,
+} from "../src/core/triggers/cooldown";
 import { extractTriggerFromCta } from "../src/core/triggers/extractTriggerFromCta";
 
 // Слова канала №1 (таро) — но в код не зашиты: приходят как данные.
@@ -178,5 +183,10 @@ describe("cooldown (time-математика)", () => {
     expect(isOnCooldown(new Date("2026-06-24T13:00:00.000Z"), now)).toBe(true);
     expect(isOnCooldown(new Date("2026-06-24T11:00:00.000Z"), now)).toBe(false);
     expect(isOnCooldown(now, now)).toBe(false);
+  });
+
+  it("cooldownPurgeCutoff: граница чистки = now − 30 дней", () => {
+    expect(COOLDOWN_RETENTION_DAYS).toBe(30);
+    expect(cooldownPurgeCutoff(now).toISOString()).toBe("2026-05-25T12:00:00.000Z");
   });
 });

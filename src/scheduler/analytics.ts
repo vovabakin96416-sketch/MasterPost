@@ -5,6 +5,7 @@ import {
   type WeeklyReportDeps,
 } from "../services/analytics/weeklyReportService.js";
 import { runStatSnapshot } from "../services/analytics/contentIntelligenceService.js";
+import { runCooldownCleanup } from "../services/cooldownCleanupService.js";
 
 /**
  * Планировщик аналитики. Отдельный от автопостинга (scheduler/index.ts) — аналитика
@@ -16,6 +17,7 @@ import { runStatSnapshot } from "../services/analytics/contentIntelligenceServic
  *    не настроен — джоб тихо ничего не делает (бот работает как раньше).
  *  - Ежедневно 22:00 МСК — снимок агрегатов канала (Шаг 12b, `ChannelStatSnapshot`) для
  *    тренда охвата. Тоже тихо без MTProto.
+ *  - Ежедневно 04:30 МСК — чистка давно истёкших строк `Cooldown` (аудит 2026-07).
  *
  * ⚠️ Изоляция: этот модуль НЕ импортирует GramJS статически. Отчёт и снимок грузят
  * `mtprotoClient` динамически внутри своих `run*` — при старте бота GramJS не подтягивается.
@@ -71,14 +73,29 @@ export function startAnalyticsScheduler(deps: WeeklyReportDeps): Scheduler {
     },
   );
 
+  const cooldownCleanupJob = new Cron(
+    "30 4 * * *",
+    {
+      name: "cooldown-cleanup",
+      timezone: ANALYTICS_TZ,
+      protect: true,
+      catch: (err: unknown) =>
+        deps.logger.error({ err }, "ошибка джоба чистки кулдаунов"),
+    },
+    async () => {
+      await runCooldownCleanup(deps);
+    },
+  );
+
   deps.logger.info(
-    "планировщик аналитики запущен (напоминание ВС 21:00, отчёт ПН 09:30, снимок ежедн. 22:00 МСК)",
+    "планировщик аналитики запущен (напоминание ВС 21:00, отчёт ПН 09:30, снимок ежедн. 22:00, чистка кулдаунов 04:30 МСК)",
   );
   return {
     stop: () => {
       contentEndingJob.stop();
       weeklyReportJob.stop();
       statSnapshotJob.stop();
+      cooldownCleanupJob.stop();
     },
   };
 }

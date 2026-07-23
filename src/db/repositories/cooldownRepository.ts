@@ -44,3 +44,17 @@ export async function saveCooldown(
     update: { expiresAt, recent },
   });
 }
+
+/**
+ * Удаляет строки кулдауна, истёкшие раньше `cutoff` (граница — в чистом core:
+ * `cooldownPurgeCutoff`). Возвращает число удалённых. Вызывается суточным кроном.
+ */
+export async function deleteExpiredCooldowns(
+  prisma: PrismaClient,
+  cutoff: Date,
+): Promise<number> {
+  const result = await prisma.cooldown.deleteMany({
+    where: { expiresAt: { lt: cutoff } },
+  });
+  return result.count;
+}
