@@ -2,7 +2,7 @@ import {
   getPostingChannel,
   getPostingChannelById,
 } from "../../db/repositories/channelRepository.js";
-import { upsertPostMetric } from "../../db/repositories/postMetricRepository.js";
+import { upsertPostMetrics } from "../../db/repositories/postMetricRepository.js";
 import { buildWeeklyReport } from "../../core/analytics/weeklyReport.js";
 import { buildGrowthReport } from "./contentIntelligenceService.js";
 import { buildExperimentProgress } from "../experiments/experimentService.js";
@@ -101,9 +101,8 @@ async function collectReport(
     await client.connect();
     const since = new Date(Date.now() - WEEK_MS);
     const metrics = await fetchRecentPostMetrics(client, channel.chatId, since);
-    for (const metric of metrics) {
-      await upsertPostMetric(deps.prisma, channel.id, metric);
-    }
+    // Батч одной транзакцией (аудит 2026-07) — вместо ~100 round-trip'ов к БД.
+    await upsertPostMetrics(deps.prisma, channel.id, metrics);
     const weekly = buildWeeklyReport(metrics, channel.timezone, {
       username: channel.username,
       chatId: channel.chatId,

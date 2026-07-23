@@ -5,7 +5,6 @@ import {
   renderTemplate,
 } from "../../../core/triggers/pickPrediction.js";
 import { isOnCooldown, nextExpiry } from "../../../core/triggers/cooldown.js";
-import { resolveCommentChannel } from "./routing.js";
 import { getTextPool } from "../../../db/repositories/textPoolRepository.js";
 import {
   loadCooldown,
@@ -28,7 +27,7 @@ const TRIGGER_ALIASES: Record<string, string> = {
 /**
  * Реальная логика триггеров в комментах (порт `handle_message` Python-бота).
  *
- * Поток: резолв активного канала → проверка `comments_enabled` → совпадение
+ * Поток: канал (резолвнут композером) → проверка `comments_enabled` → совпадение
  * слова из `Channel.triggerWords` → пул `TextPool` по совпавшему слову →
  * кулдаун → случайное предсказание с подстановкой `{name}` → ответ.
  * Вся тематика — в данных канала; код общий для любой ниши.
@@ -36,7 +35,7 @@ const TRIGGER_ALIASES: Record<string, string> = {
 export function createTriggerStage(): CommentStage {
   return {
     name: "trigger",
-    async handle(ctx, deps) {
+    async handle(ctx, deps, channel) {
       const message = ctx.message;
       const from = ctx.from;
       if (message === undefined || from === undefined) {
@@ -44,14 +43,6 @@ export function createTriggerStage(): CommentStage {
       }
       const text = message.text;
       if (text === undefined) {
-        return "pass";
-      }
-
-      // Маршрутизация по группе обсуждения (Шаг 8c): коммент относится к СВОЕМУ
-      // каналу. Общий с AI-стадией резолв (`routing.ts`): выученная связь →
-      // origin-канал автопересланного поста → фолбэк на первый активный канал.
-      const channel = await resolveCommentChannel(ctx, deps);
-      if (channel === null) {
         return "pass";
       }
 

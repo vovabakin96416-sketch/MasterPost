@@ -10,12 +10,12 @@ import type { PostMetricInput } from "../../core/analytics/weeklyReport.js";
  * Поля снимка — тот же плоский `PostMetricInput` из core, что собирает GramJS-слой.
  */
 
-/** Создаёт или обновляет снимок метрик поста (по каналу + id сообщения). */
-export async function upsertPostMetric(
+/** Один upsert снимка как незапущенный PrismaPromise — кирпич для батча. */
+function upsertPostMetricQuery(
   prisma: PrismaClient,
   channelId: string,
   data: PostMetricInput,
-): Promise<void> {
+): ReturnType<PrismaClient["postMetric"]["upsert"]> {
   const values = {
     views: data.views,
     reactions: data.reactions,
@@ -27,7 +27,7 @@ export async function upsertPostMetric(
     hasButtons: data.hasButtons,
     charLen: data.charLen,
   };
-  await prisma.postMetric.upsert({
+  return prisma.postMetric.upsert({
     where: {
       channelId_messageId: { channelId, messageId: data.messageId },
     },
@@ -37,11 +37,30 @@ export async function upsertPostMetric(
 }
 
 /**
+ * Батч-запись пачки снимков одной транзакцией (аудит 2026-07): отчётные джобы
+ * писали до ~100 upsert'ов ПОСЛЕДОВАТЕЛЬНО (round-trip на каждый) — `$transaction`
+ * шлёт их одним обменом с БД. Идемпотентность та же (upsert по `[channelId,
+ * messageId]`); пустой список — no-op без обращения к БД.
+ */
+export async function upsertPostMetrics(
+  prisma: PrismaClient,
+  channelId: string,
+  metrics: readonly PostMetricInput[],
+): Promise<void> {
+  if (metrics.length === 0) {
+    return;
+  }
+  await prisma.$transaction(
+    metrics.map((data) => upsertPostMetricQuery(prisma, channelId, data)),
+  );
+}
+
+/**
  * Помечает будущий снимок метрик поста вариантом эксперимента (Шаг 13d). Вызывается
  * при публикации AI-поста, несущего вариант активного эксперимента: создаёт заготовку
  * `PostMetric` с `variantKey`/`origin=ai` (метрики нулевые — их позже наполнит сбор
  * MTProto). Идемпотентно (upsert по `[channelId, messageId]`): `origin`/`variantKey`
- * ставим и в create, и в update; `upsertPostMetric` при сборе метрик эти поля НЕ трогает,
+ * ставим и в create, и в update; `upsertPostMetrics` при сборе метрик эти поля НЕ трогает,
  * так что вариант доживает до вердикта. `messageId` из Bot API == id сообщения в MTProto.
  */
 export async function seedVariantMetric(

@@ -1,7 +1,6 @@
 import { containsTrigger } from "../../../core/triggers/containsTrigger.js";
 import { isOnCooldown, nextExpiry } from "../../../core/triggers/cooldown.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
-import { resolveCommentChannel } from "./routing.js";
 import { getReplyChannelById } from "../../../db/repositories/channelRepository.js";
 import {
   loadCooldown,
@@ -35,7 +34,7 @@ const AI_REPLY_COOLDOWN_KEY = "__ai_reply";
 export function createAiReplyStage(): CommentStage {
   return {
     name: "ai-reply",
-    async handle(ctx, deps) {
+    async handle(ctx, deps, routed) {
       const message = ctx.message;
       const from = ctx.from;
       if (message?.text === undefined || from === undefined) {
@@ -46,28 +45,23 @@ export function createAiReplyStage(): CommentStage {
         return "pass";
       }
       const text = message.text;
-
-      // 1. Резолв «своего» канала (общий с триггер-стадией). null → pass.
-      const routed = await resolveCommentChannel(ctx, deps);
-      if (routed === null) {
-        return "pass";
-      }
       const channelId = routed.id;
 
-      // 2. Тумблер фичи (дефолт ВЫКЛ) — дешёвая проверка до всего платного.
+      // 1. Тумблер фичи (дефолт ВЫКЛ) — дешёвая проверка до всего платного.
+      // (Резолв канала + гейт бота уже пройдены в композере — канал пришёл готовым.)
       const enabled = await getAiReplyEnabled(deps.prisma, channelId);
       if (!enabled) {
         return "pass";
       }
 
-      // 3. Совпадение по отдельному набору AI-триггеров («содержит слово»).
+      // 2. Совпадение по отдельному набору AI-триггеров («содержит слово»).
       const aiWords = await getAiTriggerWords(deps.prisma, channelId);
       const matched = containsTrigger(text, aiWords);
       if (matched === null) {
         return "pass";
       }
 
-      // 4. Полные поля канала (тон/ниша/язык/TZ) — фетчим ленивно, раз триггер совпал.
+      // 3. Полные поля канала (тон/ниша/язык/TZ) — фетчим ленивно, раз триггер совпал.
       const channel = await getReplyChannelById(deps.prisma, channelId);
       if (channel === null) {
         return "pass";
@@ -76,7 +70,7 @@ export function createAiReplyStage(): CommentStage {
       const userId = String(from.id);
       const now = new Date();
 
-      // 5. Пер-юзер кулдаун (синтетический ключ, час — из общей настройки канала).
+      // 4. Пер-юзер кулдаун (синтетический ключ, час — из общей настройки канала).
       const cooldown = await loadCooldown(
         deps.prisma,
         channelId,
@@ -87,7 +81,7 @@ export function createAiReplyStage(): CommentStage {
         return "pass";
       }
 
-      // 6. Дневной бюджет канала (дата дня — в TZ канала). Списываем ДО вызова —
+      // 5. Дневной бюджет канала (дата дня — в TZ канала). Списываем ДО вызова —
       // жёсткая защита от расхода: исчерпан бюджет / cap=0 → молчим.
       const today = localDateParts(now, channel.timezone).isoDate;
       const withinBudget = await tryConsumeDailyBudget(
@@ -100,7 +94,7 @@ export function createAiReplyStage(): CommentStage {
         return "pass";
       }
 
-      // 7. Платный вызов (последним). Ошибка/пустой ответ → молчим.
+      // 6. Платный вызов (последним). Ошибка/пустой ответ → молчим.
       const reply = await generateReply(
         {
           logger: deps.logger,

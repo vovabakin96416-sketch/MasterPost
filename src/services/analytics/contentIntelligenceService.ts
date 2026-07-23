@@ -3,7 +3,7 @@ import type { PrismaClient } from "../../db/client.js";
 import { getPostingChannel } from "../../db/repositories/channelRepository.js";
 import {
   listPostMetricsSince,
-  upsertPostMetric,
+  upsertPostMetrics,
 } from "../../db/repositories/postMetricRepository.js";
 import {
   createStatSnapshot,
@@ -158,9 +158,8 @@ async function collectSnapshot(
     await client.connect();
     const since = new Date(Date.now() - WEEK_MS);
     const metrics = await fetchRecentPostMetrics(client, chatId, since);
-    for (const metric of metrics) {
-      await upsertPostMetric(deps.prisma, channelId, metric);
-    }
+    // Батч одной транзакцией (аудит 2026-07) — вместо ~100 round-trip'ов к БД.
+    await upsertPostMetrics(deps.prisma, channelId, metrics);
     const subscribers = await fetchSubscriberCount(client, chatId);
     const topHours = await fetchTopHours(client, chatId);
     const stat = periodStat(metrics);

@@ -1,5 +1,6 @@
 import type { Context } from "grammy";
 import type { Logger } from "pino";
+import type { RoutableChannel } from "../../../core/comments/routeChannel.js";
 import type { PrismaClient } from "../../../db/client.js";
 import type { OwnerBotRegistry } from "../../../services/botRegistry.js";
 
@@ -37,8 +38,16 @@ export interface CommentDeps {
 /** Результат стадии: `handled` — обработано (стоп), `pass` — передать дальше. */
 export type StageResult = "handled" | "pass";
 
-/** Одна стадия конвейера. */
+/**
+ * Одна стадия конвейера. Канал резолвится ОДИН раз в композере (аудит 2026-07:
+ * было 3 стадии × 2 SELECT'а на каждый коммент) и приходит готовым — вместе с уже
+ * пройденным гейтом принадлежности бота (14b-bis-4).
+ */
 export interface CommentStage {
   readonly name: string;
-  handle(ctx: Context, deps: CommentDeps): Promise<StageResult>;
+  handle(
+    ctx: Context,
+    deps: CommentDeps,
+    channel: RoutableChannel,
+  ): Promise<StageResult>;
 }

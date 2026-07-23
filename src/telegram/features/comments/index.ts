@@ -2,6 +2,7 @@ import { Composer, type Context } from "grammy";
 import { createModerationStage } from "./moderationStage.js";
 import { createTriggerStage } from "./triggerStage.js";
 import { createAiReplyStage } from "./aiReplyStage.js";
+import { resolveCommentChannel } from "./routing.js";
 import type { CommentDeps, CommentStage } from "./types.js";
 
 /**
@@ -28,8 +29,15 @@ export function createCommentsComposer(deps: CommentDeps): Composer<Context> {
       if (ctx.message.text.startsWith("/")) {
         return;
       }
+      // Резолв «своего» канала + гейт принадлежности бота (14b-bis-4) — ОДИН раз
+      // на коммент, а не в каждой стадии (аудит 2026-07: было до 6 SELECT'ов).
+      // null = «не наш / резолв невозможен» → все стадии молчат, как раньше.
+      const channel = await resolveCommentChannel(ctx, deps);
+      if (channel === null) {
+        return;
+      }
       for (const stage of stages) {
-        const result = await stage.handle(ctx, deps);
+        const result = await stage.handle(ctx, deps, channel);
         if (result === "handled") {
           return;
         }

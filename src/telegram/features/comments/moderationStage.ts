@@ -6,7 +6,6 @@ import {
 import { shouldCheckToxicity } from "../../../core/moderation/buildToxicityPrompt.js";
 import { buildPostLink } from "../../../core/analytics/postLink.js";
 import { localDateParts } from "../../../core/schedule/localDate.js";
-import { resolveCommentChannel } from "./routing.js";
 import { resolveOwnerTarget } from "../../../core/approval/access.js";
 import {
   getOwnerTelegramIdByChannelId,
@@ -46,20 +45,14 @@ const REASON_LABEL: Record<SpamReason, string> = {
 export function createModerationStage(): CommentStage {
   return {
     name: "moderation",
-    async handle(ctx, deps) {
+    async handle(ctx, deps, channel) {
       const message = ctx.message;
       const from = ctx.from;
       if (message?.text === undefined || from === undefined) {
         return "pass";
       }
       const text = message.text;
-
-      // Резолв «своего» канала (общий с триггер/AI-стадиями). null → pass.
-      const routed = await resolveCommentChannel(ctx, deps);
-      if (routed === null) {
-        return "pass";
-      }
-      const channelId = routed.id;
+      const channelId = channel.id;
 
       // Тумблер фичи (дефолт ВЫКЛ) — дешёвая проверка до всего остального.
       const enabled = await getModerationEnabled(deps.prisma, channelId);
